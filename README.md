@@ -5,6 +5,8 @@ This repository will be a place for me to learn LLM basics. Target is to write a
 ## Roadmap
 
 - [ ] Byte Pair Encoding
+- [ ] Tokenize a big corpus
+- [ ] Generate vocab file
 - [ ] Tokenizer 
 - [ ] Dense Architecture LLM 
 - [ ] Mixture of Expert Architecture

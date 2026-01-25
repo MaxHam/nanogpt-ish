@@ -10,7 +10,7 @@ struct BytePairEncoder {
 }
 
 impl BytePairEncoder {
-    fn encode(&self, text: &str) -> Vec<u16>{
+    fn encode(&self, text: &str) -> Vec<u16> {
         let mut tokens: Vec<u16> = text.bytes().map(|b| b as u16).collect();
 
         for (pair, token_id) in &self.merge_rules {
@@ -20,8 +20,8 @@ impl BytePairEncoder {
         tokens
     }
 
-    fn decode(&self, tokens: &Vec<u16>) -> String {
-        let mut target_tokens = tokens.clone();
+    fn decode(&self, tokens: &[u16]) -> String {
+        let mut target_tokens: Vec<u16> = tokens.to_vec();
         for (pair, token_id) in self.merge_rules.iter().rev() {
             target_tokens = expand_token(target_tokens, *pair, *token_id);
         }
@@ -29,50 +29,49 @@ impl BytePairEncoder {
         let bytes: Vec<u8> = target_tokens.iter().map(|&t| t as u8).collect();
         String::from_utf8(bytes).unwrap()
     }
-}
 
-fn train(corpus: &str, num_merges: u8) -> BytePairEncoder {
-    // initialize tokens with character bytes as u16 in a Rust-idiomatic way
-    let mut tokens: Vec<u16> = corpus.bytes().map(|b| b as u16).collect();
+    fn train(corpus: &str, num_merges: u8) -> BytePairEncoder {
+        let mut tokens: Vec<u16> = corpus.bytes().map(|b| b as u16).collect();
 
-    let mut vocab: HashSet<u16> = (0u16..=255u16).collect();
-    let mut merge_rules: Vec<((u16, u16), u16)> = vec![];
-    let mut next_token_id: u16 = 256;
+        let mut vocab: HashSet<u16> = (0u16..=255u16).collect();
+        let mut merge_rules: Vec<((u16, u16), u16)> = vec![];
+        let mut next_token_id: u16 = 256;
 
-    (0..num_merges).for_each(|_| {
-        // if not a single pair can be found then exit early
-        // e.g. corpus "a"
-        if tokens.len() <= 1 {
-            return;
-        }
-        let mut pair_frequencies: HashMap<(u16, u16), i32> = HashMap::new();
-        (0..tokens.len() - 1).for_each(|j| {
-            let pair = (tokens[j] as u16, tokens[j + 1] as u16);
-            let count = pair_frequencies.get(&pair).unwrap_or(&0) + 1;
-            pair_frequencies.insert(pair, count);
+        (0..num_merges).for_each(|_| {
+            // if not a single pair can be found then exit early
+            // e.g. corpus "a"
+            if tokens.len() <= 1 {
+                return;
+            }
+            let mut pair_frequencies: HashMap<(u16, u16), i32> = HashMap::new();
+            (0..tokens.len() - 1).for_each(|j| {
+                let pair = (tokens[j], tokens[j + 1]);
+                let count = pair_frequencies.get(&pair).unwrap_or(&0) + 1;
+                pair_frequencies.insert(pair, count);
+            });
+
+            let most_frequent_pair = pair_frequencies
+                .iter()
+                .max_by(|a, b| a.1.cmp(b.1).then_with(|| a.0.cmp(b.0)))
+                .map(|(k, _)| *k)
+                .unwrap();
+
+            merge_rules.push((most_frequent_pair, next_token_id));
+            vocab.insert(next_token_id);
+
+            tokens = replace_pair(&tokens, most_frequent_pair, next_token_id);
+
+            next_token_id += 1;
         });
 
-        let most_frequent_pair = pair_frequencies
-            .iter()
-            .max_by_key(|entry| entry.1)
-            .map(|(k, _)| *k)
-            .unwrap();
-
-        merge_rules.push((most_frequent_pair, next_token_id));
-        vocab.insert(next_token_id);
-
-        tokens = replace_pair(&tokens, most_frequent_pair, next_token_id);
-
-        next_token_id += 1;
-    });
-
-    BytePairEncoder {
-        merge_rules,
-        vocab_size: vocab.len(),
+        BytePairEncoder {
+            merge_rules,
+            vocab_size: vocab.len(),
+        }
     }
 }
 
-fn replace_pair(tokens: &Vec<u16>, pair: (u16, u16), token_id: u16) -> Vec<u16> {
+fn replace_pair(tokens: &[u16], pair: (u16, u16), token_id: u16) -> Vec<u16> {
     let mut result = vec![];
     let mut i = 0;
     while i < tokens.len() {
@@ -99,7 +98,7 @@ fn expand_token(mut tokens: Vec<u16>, pair: (u16, u16), token_id: u16) -> Vec<u1
             i += 1;
         }
     }
-    tokens
+    tokens.to_vec()
 }
 
 #[test]
@@ -108,7 +107,7 @@ fn test_train() {
     let corpus = "foo bar baz";
 
     // When
-    let encoder = train(corpus, 1);
+    let encoder = BytePairEncoder::train(corpus, 1);
 
     // Then
     assert_eq!(
@@ -126,7 +125,7 @@ fn test_train_single_byte_corpus() {
     let corpus = "a";
 
     // When
-    let rule = train(corpus, 1);
+    let rule = BytePairEncoder::train(corpus, 1);
 
     // Then
     assert_eq!(
@@ -142,7 +141,7 @@ fn test_train_single_byte_corpus() {
 fn test_encode() {
     // Given
     let corpus = "foo bar baz";
-    let encoder = train(corpus, 1);
+    let encoder = BytePairEncoder::train(corpus, 1);
     let text = "foo bar baz"; // Use the same corpus to ensure merge rules apply
 
     // When
@@ -157,7 +156,7 @@ fn test_encode() {
 fn test_decode() {
     // Given
     let corpus = "foo bar baz";
-    let encoder = train(corpus, 1);
+    let encoder = BytePairEncoder::train(corpus, 1);
 
     // When
     let encoded = encoder.encode(corpus);
