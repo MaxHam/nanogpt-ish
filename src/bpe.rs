@@ -3,6 +3,8 @@ use std::{
     vec,
 };
 
+type Utf8Byte = u8;
+
 #[derive(PartialEq, Debug)]
 pub struct BytePairEncoder {
     merge_rules: Vec<((u16, u16), u16)>, // (pair, merged_id)
@@ -26,7 +28,7 @@ impl BytePairEncoder {
             target_tokens = expand_token(target_tokens, *pair, *token_id);
         }
         // Convert u16 tokens back to bytes and then to string
-        let bytes: Vec<u8> = target_tokens.iter().map(|&t| t as u8).collect();
+        let bytes: Vec<Utf8Byte> = target_tokens.iter().map(|&t| t as u8).collect();
         String::from_utf8(bytes).unwrap()
     }
 
@@ -70,13 +72,13 @@ impl BytePairEncoder {
         }
     }
 
-    pub fn vocabulary(&self) -> HashMap<u16, Vec<u8>> {
+    pub fn vocabulary(&self) -> HashMap<u16, Vec<Utf8Byte>> {
         if self.merge_rules.is_empty() {
             panic!("You need to train the byte pair encoder before you can get a vocabulary.");
         }
 
-        // Prefill vocab: each u16 in 0..=255 is a vector containing its byte value
-        let mut vocab: HashMap<u16, Vec<u8>> =
+        // Prefill vocab: each u16 in 0..=255 is a vector of Vec<u8> containing its byte value
+        let mut vocab: HashMap<u16, Vec<Utf8Byte>> =
             (0u16..=255u16).map(|i| (i, vec![i as u8])).collect();
 
         // For each merge, create the bytes representation by concatenating its parts
