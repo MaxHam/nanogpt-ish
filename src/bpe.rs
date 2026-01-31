@@ -12,7 +12,7 @@ pub struct Token {
 }
 
 impl Token {
-    fn new(id: u16, value: Vec<Utf8Byte>) -> Token {
+    pub fn new(id: u16, value: Vec<Utf8Byte>) -> Token {
         Token { id, value }
     }
     fn from_pair(id: &u16, pair: &(Token, Token)) -> Token {
@@ -31,7 +31,7 @@ impl Token {
         }
     }
 
-    fn to_utf8_bytes(&self) -> Vec<Utf8Byte> {
+    pub fn to_utf8_bytes(&self) -> Vec<Utf8Byte> {
         let bytes: Vec<Utf8Byte> = self.value.iter().map(|&t| t as Utf8Byte).collect();
         bytes
     }
@@ -93,7 +93,7 @@ impl Tokenizer {
         std::fs::write("vocab.json", json).expect("Failed to write vocab.json");
     }
 
-    fn encode(&self, text: &str) -> Vec<Token> {
+    pub fn encode(&self, text: &str) -> Vec<Token> {
         let mut tokens: Vec<Token> = text.bytes().map(Token::from_byte).collect();
         for (pair, token_id) in &self.merge_rules {
             tokens = replace_pair(&tokens, pair, token_id);
@@ -102,15 +102,14 @@ impl Tokenizer {
         tokens
     }
 
-    fn decode(&self, tokens: &[Token]) -> String {
+    pub fn decode(&self, tokens: &[Token]) -> String {
         let mut target_tokens: Vec<Token> = tokens.to_vec();
         for (pair, token_id) in self.merge_rules.iter().rev() {
             target_tokens = expand_token(target_tokens, pair.clone(), *token_id);
         }
         let bytes = target_tokens
             .iter()
-            .map(|t| t.to_utf8_bytes())
-            .flatten()
+            .flat_map(|t| t.to_utf8_bytes())
             .collect();
         String::from_utf8(bytes).unwrap()
     }
@@ -168,7 +167,7 @@ fn replace_pair(tokens: &[Token], pair: &(Token, Token), token_id: &u16) -> Vec<
     let mut i = 0;
     while i < tokens.len() {
         if i < tokens.len() - 1 && tokens[i] == pair.0 && tokens[i + 1] == pair.1 {
-            result.push(Token::from_pair(token_id, &pair));
+            result.push(Token::from_pair(token_id, pair));
             i += 2;
         } else {
             result.push(tokens[i].clone());
@@ -193,76 +192,99 @@ fn expand_token(mut tokens: Vec<Token>, pair: (Token, Token), token_id: u16) -> 
     tokens.to_vec()
 }
 
-#[test]
-fn test_train() {
-    // Given
-    let corpus = "foo bar baz";
+#[cfg(test)]
+mod tests {
+    use std::{fs::read_to_string, path::Path};
 
-    // When
-    let tokenizer = BytePairEncoder::train(corpus, 1);
+    use crate::bpe::{BytePairEncoder, Token, Tokenizer};
 
-    // Then
-    let merged_token = Token::from_pair(&256, &(Token::from_byte(b'b'), Token::from_byte(b'a')));
-    assert!(tokenizer.vocabulary.contains(&merged_token));
-}
 
-#[test]
-fn test_train_single_byte_corpus() {
-    // Given
-    let corpus = "a";
+    #[test]
+    fn test_train() {
+        // Given
+        let corpus = "foo bar baz";
 
-    // When
-    let tokenizer = BytePairEncoder::train(corpus, 1);
+        // When
+        let tokenizer = BytePairEncoder::train(corpus, 1);
 
-    // Then
-    assert_eq!(
-        tokenizer,
-        Tokenizer::from_bytes()
-    );
-}
+        // Then
+        let merged_token =
+            Token::from_pair(&256, &(Token::from_byte(b'b'), Token::from_byte(b'a')));
+        assert!(tokenizer.vocabulary.contains(&merged_token));
+    }
 
-#[test]
-fn test_encode() {
-    // Given
-    let corpus = "foo bar baz";
-    let encoder = BytePairEncoder::train(corpus, 1);
-    let text = "foo bar baz"; // Use the same corpus to ensure merge rules apply
+    #[test]
+    fn test_train_single_byte_corpus() {
+        // Given
+        let corpus = "a";
 
-    // When
-    let encoded = encoder.encode(text);
+        // When
+        let tokenizer = BytePairEncoder::train(corpus, 1);
 
-    // Then
-    let decoded = encoder.decode(&encoded);
-    assert_eq!(decoded, text);
-}
+        // Then
+        assert_eq!(tokenizer, Tokenizer::from_bytes());
+    }
 
-#[test]
-fn test_decode() {
-    // Given
-    let corpus = "foo bar baz";
-    let encoder = BytePairEncoder::train(corpus, 1);
+    #[test]
+    fn test_encode() {
+        // Given
+        let corpus = "foo bar baz";
+        let encoder = BytePairEncoder::train(corpus, 1);
+        let text = "foo bar baz"; // Use the same corpus to ensure merge rules apply
 
-    // When
-    let encoded = encoder.encode(corpus);
-    let decoded = encoder.decode(&encoded);
+        // When
+        let encoded = encoder.encode(text);
 
-    // Then
-    assert_eq!(decoded, corpus);
-}
+        // Then
+        let decoded = encoder.decode(&encoded);
+        assert_eq!(decoded, text);
+    }
 
-#[test]
-fn test_vocabulary() {
-    // Given
-    let corpus = "foo bar baz";
-    
-    // When
-    let tokenizer = BytePairEncoder::train(corpus, 1);
+    #[test]
+    fn test_decode() {
+        // Given
+        let corpus = "foo bar baz";
+        let encoder = BytePairEncoder::train(corpus, 1);
 
-    // Then
-    // Vocabulary should contain all 256 base bytes plus 1 merged token
-    assert_eq!(tokenizer.vocabulary.len(), 257);
-    assert!(tokenizer.vocabulary.contains(&Token::from_byte(b'f')));
-    assert!(tokenizer
-        .vocabulary
-        .contains(&Token::new(256, vec![b'b', b'a'])));
+        // When
+        let encoded = encoder.encode(corpus);
+        let decoded = encoder.decode(&encoded);
+
+        // Then
+        assert_eq!(decoded, corpus);
+    }
+
+    #[test]
+    fn test_vocabulary() {
+        // Given
+        let corpus = "foo bar baz";
+
+        // When
+        let tokenizer = BytePairEncoder::train(corpus, 1);
+
+        // Then
+        // Vocabulary should contain all 256 base bytes plus 1 merged token
+        assert_eq!(tokenizer.vocabulary.len(), 257);
+        assert!(tokenizer.vocabulary.contains(&Token::from_byte(b'f')));
+        assert!(
+            tokenizer
+                .vocabulary
+                .contains(&Token::new(256, vec![b'b', b'a']))
+        );
+    }
+
+    #[test]
+    fn test_decode_with_corpus() {
+        // Given
+        let path = Path::new("test_corpus.txt");
+        let corpus = read_to_string(path).expect("Failed to read corpus file");
+        let tokenizer = BytePairEncoder::train(corpus.as_str(), 3);
+
+        // When
+        let encoded = tokenizer.encode("Hi World!");
+        let decoded = tokenizer.decode(&encoded);
+
+        // Then
+        assert_eq!(decoded, "Hi World!");
+    }
 }
