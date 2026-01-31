@@ -53,18 +53,21 @@ impl Tokenizer {
             panic!("You need to train the byte pair encoder before you can get a vocabulary.");
         }
 
-        let mut vocab: Tokenizer = Tokenizer::from_bytes();
+        let mut tokenizer: Tokenizer = Tokenizer::from_bytes();
+        // initial tokenizer vocab has 256 ids
+        let mut next_token_id: u16= 256;
         // iterate merge rules in rank order
         for (pair, token_id) in &merge_rules {
-            if !vocab.vocabulary.contains(&pair.0) || !vocab.vocabulary.contains(&pair.1) {
+            if !tokenizer.vocabulary.contains(&pair.0) || !tokenizer.vocabulary.contains(&pair.1) {
                 panic!(
                     "Token pair ({:?}, {:?}) not both present in vocabulary when applying merge rule for token_id {}.",
                     pair.0, pair.1, token_id
                 );
             }
-            vocab.vocabulary.insert(Token::from_pair(token_id, pair));
+            tokenizer.vocabulary.insert(Token::from_pair(&next_token_id, pair));
+            next_token_id += 1;
         }
-        vocab
+        tokenizer
     }
 
     pub fn to_json(&self) {
@@ -117,11 +120,10 @@ impl BytePairEncoder {
             .map(|&b| Token::from_byte(b))
             .collect();
 
-        let mut vocab: Tokenizer = Tokenizer::from_bytes();
         let mut merge_rules: Vec<((Token, Token), u16)> = vec![];
         let mut next_token_id: u16 = 256;
 
-        (0..num_merges).for_each(|_| {
+        (0..num_merges).for_each(|i| {
             // if not a single pair can be found then exit early
             // e.g. corpus "a"
             if tokens.len() <= 1 {
@@ -140,11 +142,7 @@ impl BytePairEncoder {
                 .map(|(k, _)| k.clone())
                 .unwrap();
 
-            merge_rules.push((most_frequent_pair.clone(), next_token_id));
-            vocab
-                .vocabulary
-                .insert(Token::from_pair(&next_token_id, &most_frequent_pair));
-
+            merge_rules.push((most_frequent_pair.clone(), i as u16));
             tokens = replace_pair(&tokens, &most_frequent_pair, &next_token_id);
 
             next_token_id += 1;
@@ -196,7 +194,7 @@ fn test_train() {
     assert_eq!(
         encoder,
         BytePairEncoder {
-            merge_rules: vec![(((Token::from_byte(b'b'), Token::from_byte(b'a')), 256u16))],
+            merge_rules: vec![(((Token::from_byte(b'b'), Token::from_byte(b'a')), 0))],
         }
     );
 }
@@ -254,11 +252,11 @@ fn test_vocabulary() {
     let encoder = BytePairEncoder::train(corpus, 1);
 
     // When
-    let vocab = Tokenizer::from_merges(encoder.merge_rules);
+    let tokenizer = Tokenizer::from_merges(encoder.merge_rules);
 
     // Then
     // Vocabulary should contain all 256 base bytes plus 1 merged token
-    assert_eq!(vocab.vocabulary.len(), 257);
-    assert!(vocab.vocabulary.contains(&Token::from_byte(b'f')));
-    assert!(vocab.vocabulary.contains(&Token::new(256, vec![b'b', b'a'])));
+    assert_eq!(tokenizer.vocabulary.len(), 257);
+    assert!(tokenizer.vocabulary.contains(&Token::from_byte(b'f')));
+    assert!(tokenizer.vocabulary.contains(&Token::new(256, vec![b'b', b'a'])));
 }
