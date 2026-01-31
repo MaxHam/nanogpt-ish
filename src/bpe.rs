@@ -131,11 +131,13 @@ impl BytePairEncoder {
         let mut merge_rules: Vec<((Token, Token), u16)> = vec![];
         let mut next_token_id: u16 = 256;
 
-        (0..num_merges).for_each(|_| {
+        for (i, _) in (0..num_merges).enumerate() {
+            eprintln!("Merge {}/{}", i + 1, num_merges);
+
             // if not a single pair can be found then exit early
             // e.g. corpus "a"
             if corpus_tokens.len() <= 1 {
-                return;
+                break;
             }
             let mut pair_frequencies: HashMap<(Token, Token), i32> = HashMap::new();
             (0..corpus_tokens.len() - 1).for_each(|j| {
@@ -152,7 +154,7 @@ impl BytePairEncoder {
 
             merge_rules.push((most_frequent_pair.clone(), next_token_id));
             next_token_id += 1;
-        });
+        }
 
         if merge_rules.is_empty() {
             Tokenizer::from_bytes()
