@@ -16,7 +16,7 @@ out = Path("gutenberg_txts")
 
 if not out.exists():
     out.mkdir(exist_ok=True)
-    for book in data[:3]:  
+    for book in data[:8]:  
         book_id = book["Text#"]
         url = f"https://www.gutenberg.org/ebooks/{book_id}.txt.utf-8"
         r = requests.get(url)
