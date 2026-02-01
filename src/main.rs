@@ -7,5 +7,5 @@ fn main() {
     let path = Path::new("gutenberg_txts/corpus.txt");
     let corpus = read_to_string(path).expect("Failed to read corpus file");
     let tokenizer = BytePairEncoder::train(corpus.as_str(), 1000);
-    tokenizer.to_json()
+    tokenizer.unwrap().to_json()
 }

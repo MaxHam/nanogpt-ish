@@ -122,18 +122,18 @@ pub struct BytePairEncoder {
 }
 
 impl BytePairEncoder {
-    pub fn train(corpus: &str, vocab_size: u16) -> Tokenizer {
+    pub fn train(corpus: &str, vocab_size: u16) -> Result<Tokenizer, &str> {
         if vocab_size <= 256 {
-            panic!(
-                "Vocabulary must need to be greater than 256 tokens otherwise no training is possible."
-            )
+            return Err(
+                "Vocabulary size must be greater than 256 tokens; otherwise, no training is possible.",
+            );
         }
         let num_merges = vocab_size - 256;
         let mut corpus_tokens: Vec<u16> = corpus.as_bytes().iter().map(|&b| b as u16).collect();
         // if not a single pair can be found then exit early
         // e.g. corpus "a"
         if corpus_tokens.len() <= 1 {
-            return Tokenizer::from_bytes();
+            return Ok(Tokenizer::from_bytes());
         }
 
         // init count of pairs
@@ -145,7 +145,8 @@ impl BytePairEncoder {
 
         // store the counts of pairs in a heap
         // allows us to get the most frequent pair with O(1)
-        let mut heap: BinaryHeap<(usize, (u16, u16))> = BinaryHeap::with_capacity(pair_counts.len());
+        let mut heap: BinaryHeap<(usize, (u16, u16))> =
+            BinaryHeap::with_capacity(pair_counts.len());
         for (pair, count) in &pair_counts {
             heap.push((*count, *pair));
         }
@@ -187,7 +188,7 @@ impl BytePairEncoder {
             next_token_id += 1;
         }
 
-        Tokenizer::from_merges(merge_rules)
+        Ok(Tokenizer::from_merges(merge_rules))
     }
 }
 fn apply_merge(
@@ -201,37 +202,57 @@ fn apply_merge(
     // If pair is found then decrement count of old pairs and increment count of given pair
     let mut new_tokens: Vec<u16> = Vec::with_capacity(tokens.len());
     let mut i = 0;
+    let mut prev_merged_right_pair: Option<(u16, u16)> = None;
     while i < tokens.len() - 1 {
         if tokens[i] == pair.0 && tokens[i + 1] == pair.1 {
+            let left_neighbor = if i > 0 { Some(tokens[i - 1]) } else { None };
+            let right_neighbor = if i + 2 < tokens.len() {
+                Some(tokens[i + 2])
+            } else {
+                None
+            };
+
             // --- Decrement old neighbor pairs ---
-            if i > 0 {
-                let left_pair = (tokens[i - 1], tokens[i]);
-                decrement_pair(pair_counts, left_pair);
+            // Skip left_pair if it equals prev right_pair (consecutive merges double-count boundary)
+            let left_pair = if i > 0 {
+                Some((tokens[i - 1], tokens[i]))
+            } else {
+                None
+            };
+            if let Some(lp) = left_pair {
+                if prev_merged_right_pair != Some(lp) {
+                    decrement_pair(pair_counts, lp);
+                }
             }
-            if i + 2 < tokens.len() {
-                let right_pair = (tokens[i + 1], tokens[i + 2]);
-                decrement_pair(pair_counts, right_pair);
+            let right_pair = if i + 2 < tokens.len() {
+                Some((tokens[i + 1], tokens[i + 2]))
+            } else {
+                None
+            };
+            if let Some(rp) = right_pair {
+                decrement_pair(pair_counts, rp);
             }
 
-            // Decrement the merged pair itself
             decrement_pair(pair_counts, *pair);
 
             new_tokens.push(new_id);
             i += 2;
+            prev_merged_right_pair = right_pair;
 
-            // --- Increment new neighbor pairs ---
-            if i > 0 {
-                let new_left = (tokens[i - 1], tokens[i]);
-                increment_pair(pair_counts, heap, new_left);
+            if let Some(left) = left_neighbor {
+                increment_pair(pair_counts, heap, (left, new_id));
             }
-            if i + 1 < tokens.len() {
-                let new_right = (tokens[i], tokens[i + 1]);
-                increment_pair(pair_counts, heap, new_right);
+            if let Some(right) = right_neighbor {
+                increment_pair(pair_counts, heap, (new_id, right));
             }
         } else {
-            i += 1;
             new_tokens.push(tokens[i]);
+            i += 1;
+            prev_merged_right_pair = None;
         }
+    }
+    if i == tokens.len() - 1 {
+        new_tokens.push(tokens[i]);
     }
     *tokens = new_tokens
 }
@@ -295,7 +316,7 @@ mod tests {
         let corpus = "foo bar baz";
 
         // When
-        let tokenizer = BytePairEncoder::train(corpus, 257);
+        let tokenizer = BytePairEncoder::train(corpus, 257).unwrap();
 
         // Then
         let merged_token =
@@ -304,15 +325,15 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
     fn test_train_too_little_vocab_size() {
         // Given
         let corpus = "foo bar baz";
 
         // When
-        BytePairEncoder::train(corpus, 1);
+        let tokenizer = BytePairEncoder::train(corpus, 1);
 
-        // Then panic
+        // Then error
+        assert!(tokenizer.is_err());
     }
     #[test]
     fn test_train_single_byte_corpus() {
@@ -323,14 +344,14 @@ mod tests {
         let tokenizer = BytePairEncoder::train(corpus, 257);
 
         // Then
-        assert_eq!(tokenizer, Tokenizer::from_bytes());
+        assert_eq!(tokenizer, Ok(Tokenizer::from_bytes()));
     }
 
     #[test]
     fn test_encode() {
         // Given
         let corpus = "foo bar baz";
-        let encoder = BytePairEncoder::train(corpus, 257);
+        let encoder = BytePairEncoder::train(corpus, 257).unwrap();
         let text = "foo bar baz"; // Use the same corpus to ensure merge rules apply
 
         // When
@@ -345,7 +366,7 @@ mod tests {
     fn test_decode() {
         // Given
         let corpus = "foo bar baz";
-        let encoder = BytePairEncoder::train(corpus, 257);
+        let encoder = BytePairEncoder::train(corpus, 257).unwrap();
 
         // When
         let encoded = encoder.encode(corpus);
@@ -361,7 +382,7 @@ mod tests {
         let corpus = "foo bar baz";
 
         // When
-        let tokenizer = BytePairEncoder::train(corpus, 257);
+        let tokenizer = BytePairEncoder::train(corpus, 257).unwrap();
 
         // Then
         // Vocabulary should contain all 256 base bytes plus 1 merged token
@@ -379,7 +400,7 @@ mod tests {
         // Given
         let path = Path::new("test_corpus.txt");
         let corpus = read_to_string(path).expect("Failed to read corpus file");
-        let tokenizer = BytePairEncoder::train(corpus.as_str(), 259);
+        let tokenizer = BytePairEncoder::train(corpus.as_str(), 259).unwrap();
 
         // When
         let encoded = tokenizer.encode("Hi World!");
