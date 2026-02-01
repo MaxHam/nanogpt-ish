@@ -1,5 +1,7 @@
 use std::{
-    collections::{BinaryHeap, HashMap, HashSet}, hash::Hash, vec
+    collections::{BinaryHeap, HashMap, HashSet},
+    hash::Hash,
+    vec,
 };
 
 type Utf8Byte = u8;
@@ -48,14 +50,21 @@ impl Tokenizer {
         }
     }
 
-    pub fn from_merges(merge_rules: Vec<((Token, Token), u16)>) -> Tokenizer {
+    pub fn from_merges(merge_rules: Vec<((u16, u16), u16)>) -> Tokenizer {
         if merge_rules.is_empty() {
             panic!("You need to train the byte pair encoder before you can get a vocabulary.");
         }
 
+        // Convert merge_rules from Vec<((u16, u16), u16)> to Vec<((Token, Token), u16)>
+        let token_merge_rules: Vec<((Token, Token), u16)> = merge_rules
+            .into_iter()
+            .map(|((a, b), id)| ((Token::from_byte(a as u8), Token::from_byte(b as u8)), id))
+            .collect();
+
         let mut tokenizer: Tokenizer = Tokenizer::from_bytes();
+
         // iterate merge rules in rank order
-        for (pair, token_id) in &merge_rules {
+        for (pair, token_id) in &token_merge_rules {
             if !tokenizer.vocabulary.contains(&pair.0) || !tokenizer.vocabulary.contains(&pair.1) {
                 panic!(
                     "Token pair ({:?}, {:?}) not both present in vocabulary when applying merge rule for token_id {}.",
@@ -66,7 +75,7 @@ impl Tokenizer {
                 .vocabulary
                 .insert(Token::from_pair(token_id, pair));
         }
-        tokenizer.merge_rules = merge_rules;
+        tokenizer.merge_rules = token_merge_rules;
         tokenizer
     }
 
@@ -115,25 +124,24 @@ pub struct BytePairEncoder {
 impl BytePairEncoder {
     pub fn train(corpus: &str, vocab_size: u16) -> Tokenizer {
         if vocab_size <= 256 {
-            panic!("Vocabulary must need to be greater than 256 tokens otherwise no training is possible.")
+            panic!(
+                "Vocabulary must need to be greater than 256 tokens otherwise no training is possible."
+            )
         }
         let num_merges = vocab_size - 256;
-        let mut corpus_tokens: Vec<u16> = corpus
-        .as_bytes()
-        .iter()
-        .map(|&b| b as u16).collect();
+        let mut corpus_tokens: Vec<u16> = corpus.as_bytes().iter().map(|&b| b as u16).collect();
         // if not a single pair can be found then exit early
         // e.g. corpus "a"
         if corpus_tokens.len() <= 1 {
-            return Tokenizer::from_bytes()
+            return Tokenizer::from_bytes();
         }
-    
+
         // init count of pairs
         let mut pair_counts: HashMap<(u16, u16), usize> = HashMap::new();
         for i in 0..corpus_tokens.len() - 1 {
-            let pair = (corpus_tokens[i], corpus_tokens[i+1]);
+            let pair = (corpus_tokens[i], corpus_tokens[i + 1]);
             *pair_counts.entry(pair).or_insert(0) += 1;
-        };
+        }
 
         // store the counts of pairs in a heap
         // allows us to get the most frequent pair with O(1)
@@ -167,22 +175,18 @@ impl BytePairEncoder {
                 Some(p) => p,
                 None => break, // No more pairs to merge
             };
-            apply_merge(&mut corpus_tokens, &mut pair_counts, &mut heap, &most_frequent_pair, next_token_id);
+            apply_merge(
+                &mut corpus_tokens,
+                &mut pair_counts,
+                &mut heap,
+                &most_frequent_pair,
+                next_token_id,
+            );
             merge_rules.push((most_frequent_pair, next_token_id));
-            
+
             next_token_id += 1;
         }
 
-        // Convert merge_rules from Vec<((u16, u16), u16)> to Vec<((Token, Token), u16)>
-        let merge_rules: Vec<((Token, Token), u16)> = merge_rules
-            .into_iter()
-            .map(|((a, b), id)| {
-                (
-                    (Token::from_byte(a as u8), Token::from_byte(b as u8)),
-                    id,
-                )
-            })
-            .collect();
         Tokenizer::from_merges(merge_rules)
     }
 }
@@ -191,7 +195,7 @@ fn apply_merge(
     pair_counts: &mut HashMap<(u16, u16), usize>,
     heap: &mut BinaryHeap<(usize, (u16, u16))>,
     pair: &(u16, u16),
-    new_id: u16
+    new_id: u16,
 ) {
     // Iterate the token array and search for adjacent token pairs that match the pair
     // If pair is found then decrement count of old pairs and increment count of given pair
@@ -208,13 +212,13 @@ fn apply_merge(
                 let right_pair = (tokens[i + 1], tokens[i + 2]);
                 decrement_pair(pair_counts, right_pair);
             }
-            
+
             // Decrement the merged pair itself
             decrement_pair(pair_counts, *pair);
-            
+
             new_tokens.push(new_id);
             i += 2;
-            
+
             // --- Increment new neighbor pairs ---
             if i > 0 {
                 let new_left = (tokens[i - 1], tokens[i]);
@@ -224,9 +228,8 @@ fn apply_merge(
                 let new_right = (tokens[i], tokens[i + 1]);
                 increment_pair(pair_counts, heap, new_right);
             }
-            
         } else {
-            i += 1; 
+            i += 1;
             new_tokens.push(tokens[i]);
         }
     }
@@ -286,7 +289,6 @@ mod tests {
 
     use crate::bpe::{BytePairEncoder, Token, Tokenizer};
 
-
     #[test]
     fn test_train() {
         // Given
@@ -300,7 +302,6 @@ mod tests {
             Token::from_pair(&256, &(Token::from_byte(b'b'), Token::from_byte(b'a')));
         assert!(tokenizer.vocabulary.contains(&merged_token));
     }
-
 
     #[test]
     #[should_panic]
