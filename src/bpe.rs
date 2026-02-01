@@ -29,11 +29,6 @@ impl Token {
             value: vec![byte],
         }
     }
-
-    pub fn to_utf8_bytes(&self) -> Vec<Utf8Byte> {
-        let bytes: Vec<Utf8Byte> = self.value.iter().map(|&t| t as Utf8Byte).collect();
-        bytes
-    }
 }
 
 #[derive(PartialEq, Debug)]
@@ -104,10 +99,10 @@ impl Tokenizer {
         for (pair, token_id) in self.merge_rules.iter().rev() {
             target_tokens = expand_token(target_tokens, pair.clone(), *token_id);
         }
-        let bytes = target_tokens
-            .iter()
-            .flat_map(|t| t.to_utf8_bytes())
-            .collect();
+        let mut bytes = Vec::new();
+        for token in &target_tokens {
+            bytes.extend_from_slice(&token.value);
+        }
         String::from_utf8(bytes).unwrap()
     }
 }
@@ -134,7 +129,7 @@ impl BytePairEncoder {
         }
     
         // init count of pairs
-        let mut pair_counts: HashMap<(u16, u16), i32> = HashMap::new();
+        let mut pair_counts: HashMap<(u16, u16), usize> = HashMap::new();
         for i in 0..corpus_tokens.len() - 1 {
             let pair = (corpus_tokens[i], corpus_tokens[i+1]);
             *pair_counts.entry(pair).or_insert(0) += 1;
@@ -142,7 +137,7 @@ impl BytePairEncoder {
 
         // store the counts of pairs in a heap
         // allows us to get the most frequent pair with O(1)
-        let mut heap: BinaryHeap<(i32, (u16, u16))> = BinaryHeap::new();
+        let mut heap: BinaryHeap<(usize, (u16, u16))> = BinaryHeap::new();
         for (pair, count) in &pair_counts {
             heap.push((*count, *pair));
         }
@@ -193,14 +188,14 @@ impl BytePairEncoder {
 }
 fn apply_merge(
     tokens: &mut Vec<u16>,
-    pair_counts: &mut HashMap<(u16, u16), i32>,
-    heap: &mut BinaryHeap<(i32, (u16, u16))>,
+    pair_counts: &mut HashMap<(u16, u16), usize>,
+    heap: &mut BinaryHeap<(usize, (u16, u16))>,
     pair: &(u16, u16),
     new_id: u16
 ) {
     // Iterate the token array and search for adjacent token pairs that match the pair
     // If pair is found then decrement count of old pairs and increment count of given pair
-
+    let mut new_tokens: Vec<u16> = Vec::with_capacity(tokens.len());
     let mut i = 0;
     while i < tokens.len() - 1 {
         if tokens[i] == pair.0 && tokens[i + 1] == pair.1 {
@@ -217,9 +212,8 @@ fn apply_merge(
             // Decrement the merged pair itself
             decrement_pair(pair_counts, *pair);
             
-            // --- Perform the merge ---
-            tokens[i] = new_id;
-            tokens.remove(i + 1);  // This is O(n) — see note below
+            new_tokens.push(new_id);
+            i += 2;
             
             // --- Increment new neighbor pairs ---
             if i > 0 {
@@ -231,14 +225,15 @@ fn apply_merge(
                 increment_pair(pair_counts, heap, new_right);
             }
             
-            // Don't increment i — check if next position also matches
         } else {
             i += 1; 
+            new_tokens.push(tokens[i]);
         }
     }
+    *tokens = new_tokens
 }
 
-fn decrement_pair(counts: &mut HashMap<(u16, u16), i32>, pair: (u16, u16)) {
+fn decrement_pair(counts: &mut HashMap<(u16, u16), usize>, pair: (u16, u16)) {
     if let Some(c) = counts.get_mut(&pair) {
         *c -= 1;
         // Don't push to heap — the old entry will be detected as stale
@@ -246,8 +241,8 @@ fn decrement_pair(counts: &mut HashMap<(u16, u16), i32>, pair: (u16, u16)) {
 }
 
 fn increment_pair(
-    counts: &mut HashMap<(u16, u16), i32>,
-    heap: &mut BinaryHeap<(i32, (u16, u16))>,
+    counts: &mut HashMap<(u16, u16), usize>,
+    heap: &mut BinaryHeap<(usize, (u16, u16))>,
     pair: (u16, u16),
 ) {
     let count = counts.entry(pair).or_insert(0);
@@ -282,7 +277,7 @@ fn expand_token(mut tokens: Vec<Token>, pair: (Token, Token), token_id: u16) -> 
             i += 1;
         }
     }
-    tokens.to_vec()
+    tokens
 }
 
 #[cfg(test)]
