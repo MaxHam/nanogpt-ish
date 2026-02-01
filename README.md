@@ -14,7 +14,7 @@ uv run gutenberg.py
 ```
 
 ## Roadmap
-- [ ] Byte Pair Encoding
+- [x] Byte Pair Encoding
 - [ ] Tokenize a big corpus
 - [ ] Generate vocab file
 - [ ] Tokenizer 
