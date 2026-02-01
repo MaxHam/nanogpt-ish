@@ -55,26 +55,40 @@ impl Tokenizer {
             panic!("You need to train the byte pair encoder before you can get a vocabulary.");
         }
 
-        // Convert merge_rules from Vec<((u16, u16), u16)> to Vec<((Token, Token), u16)>
-        let token_merge_rules: Vec<((Token, Token), u16)> = merge_rules
-            .into_iter()
-            .map(|((a, b), id)| ((Token::from_byte(a as u8), Token::from_byte(b as u8)), id))
-            .collect();
-
         let mut tokenizer: Tokenizer = Tokenizer::from_bytes();
 
-        // iterate merge rules in rank order
-        for (pair, token_id) in &token_merge_rules {
+        // Resolve token ids to actual Token structs (bytes 0-255 + merges in order)
+        let mut id_to_token: HashMap<u16, Token> = (0u16..=255u16)
+            .map(|id| (id, Token::from_byte(id as u8)))
+            .collect();
+
+        let mut token_merge_rules: Vec<((Token, Token), u16)> = Vec::with_capacity(merge_rules.len());
+
+        for ((a, b), token_id) in merge_rules {
+            let token_a = id_to_token
+                .get(&a)
+                .unwrap_or_else(|| panic!("Token id {} not found when building merge rule for id {}", a, token_id))
+                .clone();
+            let token_b = id_to_token
+                .get(&b)
+                .unwrap_or_else(|| panic!("Token id {} not found when building merge rule for id {}", b, token_id))
+                .clone();
+
+            let pair = (token_a, token_b);
+
             if !tokenizer.vocabulary.contains(&pair.0) || !tokenizer.vocabulary.contains(&pair.1) {
                 panic!(
                     "Token pair ({:?}, {:?}) not both present in vocabulary when applying merge rule for token_id {}.",
                     pair.0, pair.1, token_id
                 );
             }
-            tokenizer
-                .vocabulary
-                .insert(Token::from_pair(token_id, pair));
+
+            let new_token = Token::from_pair(&token_id, &pair);
+            tokenizer.vocabulary.insert(new_token.clone());
+            id_to_token.insert(token_id, new_token);
+            token_merge_rules.push((pair, token_id));
         }
+
         tokenizer.merge_rules = token_merge_rules;
         tokenizer
     }
@@ -388,6 +402,23 @@ mod tests {
         );
     }
 
+
+    #[test]
+    fn test_no_duplicates_in_vocab() {
+        // Given
+        let path = Path::new("test_corpus.txt");
+        let corpus = read_to_string(path).expect("Failed to read corpus file");
+        
+        // When
+        let tokenizer = Tokenizer::train(corpus.as_str(), 512).unwrap();
+
+        // Then
+        // Assert that every token in the vocabulary appears only once
+        for token in &tokenizer.vocabulary {
+            let count = tokenizer.vocabulary.iter().filter(|t| *t == token).count();
+            assert_eq!(count, 1, "Token {:?} is stored more than once", token);
+        }
+    }
     #[test]
     fn test_decode_with_corpus() {
         // Given
