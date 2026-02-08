@@ -8,7 +8,7 @@ type Utf8Byte = u8;
 
 #[derive(Eq, Ord, PartialEq, PartialOrd, Hash, Debug, Clone)]
 pub struct Token {
-    id: u16,
+    pub id: u16,
     value: Vec<Utf8Byte>,
 }
 
