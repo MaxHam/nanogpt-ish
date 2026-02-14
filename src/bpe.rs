@@ -25,7 +25,7 @@ impl Token {
             value: new_bytes,
         }
     }
-    fn from_byte(byte: Utf8Byte) -> Token {
+    pub fn from_byte(byte: Utf8Byte) -> Token {
         Token {
             id: byte as u16,
             value: vec![byte],

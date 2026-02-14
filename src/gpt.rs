@@ -1,4 +1,4 @@
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{DType, Device, IndexOp, Result, Shape, Tensor};
 use candle_nn::{Embedding, Linear, Module, VarBuilder};
 
 use crate::bpe::{Token, Tokenizer};
@@ -10,61 +10,51 @@ pub struct GPTConfig {
     device: Device,
 }
 
+impl GPTConfig {
+    pub fn default(vocab_size: usize) -> GPTConfig {
+        GPTConfig {
+            vocab_size,
+            n_embd: 32,
+            device: Device::Cpu,
+        }
+    }
+}
+
 pub struct Transformer<'a> {
     pub config: &'a GPTConfig,
     tok_emb: Embedding,
-    lm_head: Linear
+    lm_head: Linear,
 }
 
 trait CustomTokenizer {
-    fn from_tokens(tokens: Vec<Token>, device: &Device) -> Result<Tensor>;
-    fn most_likely_token(&self, tokenizer: &Tokenizer) -> Token;
+    fn from_tokens(tokens: &Vec<Token>, device: &Device) -> Result<Tensor>;
 }
 
 impl CustomTokenizer for Tensor {
-    fn from_tokens(tokens: Vec<Token>, device: &Device) -> Result<Tensor> {
+    fn from_tokens(tokens: &Vec<Token>, device: &Device) -> Result<Tensor> {
         Tensor::from_vec(
             tokens.iter().map(|t| t.id as u32).collect::<Vec<u32>>(),
             (1, tokens.len()),
             &device,
         )
     }
-    fn most_likely_token(&self, tokenizer: &Tokenizer) -> Token {
-        // Converts a Tensor of shape (1, N) (as created by from_tokens) back into a Vec<Token>
-        // Assumes the original token IDs are stored as u32 in the tensor.
-        // Since Token struct only has an id, we'll reconstruct tokens from the IDs.
-        let ids = self.to_vec1::<u32>().unwrap_or_default();
-        // Find the index of the highest value in the tensor (assumes shape (1, N)).
-        // If the tensor is empty, return a default token (or panic).
-        if ids.is_empty() {
-            panic!("Tensor is empty, cannot determine most likely token");
-        }
-        let (_, &max_id) = ids
-            .iter()
-            .enumerate()
-            .max_by_key(|&(_, val)| val)
-            .expect("Failed to find max in ids");
-        // Map back to Token
-        let token = tokenizer
-            .vocabulary
-            .iter()
-            .find(|t| t.id == max_id as u16)
-            .cloned()
-            .expect("Token id not found in vocabulary");
-        token
-    }
 }
 
 impl<'a> Transformer<'a> {
     pub fn new(config: &'a GPTConfig) -> Result<Self> {
         // random initial weights
-        let device = config.device.clone();
+        let device = &config.device;
         let vb = VarBuilder::zeros(DType::F32, &device);
         let tok_emb = candle_nn::embedding(config.vocab_size, config.n_embd, vb.pp("tok_emb"))?;
         // weight tying, we reuse the token embedding for the lm_head
+        // TODO: find out whether we can reuse the actual tensor and not just clone it, for efficiency sake
         let lm_head = Linear::new(tok_emb.embeddings().clone(), None);
 
-        Ok(Self { config, tok_emb, lm_head})
+        Ok(Self {
+            config,
+            tok_emb,
+            lm_head,
+        })
     }
 
     fn forward(&self, idx: &Tensor) -> Result<Tensor> {
@@ -81,16 +71,47 @@ impl<'a> Transformer<'a> {
 
         Ok(logits)
     }
+
+    pub fn generate(
+        &self,
+        tokenizer: &Tokenizer,
+        prompt: &str,
+        max_new_tokens: usize,
+    ) -> Result<String> {
+        let device = &self.config.device;
+        let mut tokens = tokenizer.encode(prompt);
+        let mut input = Tensor::from_tokens(&tokens, &device)?;
+
+        for _ in 0..max_new_tokens {
+            let logits = self.forward(&input)?;
+
+            let (_, seq_len, _) = logits.dims3()?;
+
+            let last_logits = logits.i((0, seq_len - 1))?;
+
+            // greed sampling, equals temperature=0
+            let next_id = last_logits.argmax(0)?.to_scalar::<u32>()?;
+            // Convert id to token
+            let next_token = tokenizer
+                .vocabulary
+                .iter()
+                .find(|t| t.id == next_id as u16)
+                .cloned()
+                .expect("Token not found");
+
+            // Add generated token to input and rebuild tensor
+            tokens.push(next_token);
+            input = Tensor::from_tokens(&tokens, device)?;
+        }
+
+        Ok(tokenizer.decode(&tokens))
+    }
 }
 
 #[test]
 fn test_tok_emb_tieing() {
     // Given
-    let config = GPTConfig {
-        device: Device::Cpu,
-        vocab_size: 64,
-        n_embd: 32,
-    };
+    let config = GPTConfig::default(64);
     let input = Tensor::from_vec(vec![1u32, 5, 42, 9], (1, 4), &config.device).unwrap();
     // When
     let model = Transformer::new(&config).unwrap();
@@ -110,23 +131,35 @@ fn test_tok_emb_tieing() {
     assert_eq!(shape.dims(), &[1, 4, config.vocab_size]);
 }
 
-// #[test]
-// fn test_with_tokenizer() {
-//     // Given
-//     let tokenizer = Tokenizer::train("", 257).unwrap();
-//     let config = &GPTConfig {
-//         vocab_size: tokenizer.vocabulary.len(),
-//         n_embd: 32,
-//         device: Device::Cpu,
-//     };
-//     let gpt = Transformer::new(config).unwrap();
-//     let tokens = tokenizer.encode("foo bar");
-//     let input = Tensor::from_tokens(tokens, &config.device).unwrap();
+#[test]
+fn test_generate() {
+    let tokenizer = Tokenizer::train("", 257).unwrap();
+    let config = GPTConfig::default(tokenizer.vocabulary.len());
+    let prompt = "Hi";
+    // When
+    let model = Transformer::new(&config).unwrap();
+    let output = model.generate(&tokenizer, &prompt, 1).unwrap();
 
-//     // When
-//     let output = gpt.forward(&input).unwrap();
+    // Then
+    debug_assert!(
+        !output.is_empty(),
+        "Input prompt string should not be empty"
+    );
+}
 
-//     // Then
-//     let output_tokens = output.most_likely_token(&tokenizer);
-//     debug_assert_eq!(tokenizer.decode(&vec![output_tokens]), "foo bar")
-// }
+#[test]
+fn test_token_to_tensor() {
+    // Given
+    let tokens = vec![
+        Token::from_byte(0),
+        Token::from_byte(1),
+        Token::from_byte(2),
+    ];
+
+    // When
+    let input = Tensor::from_tokens(&tokens, &Device::Cpu).unwrap();
+
+    // Then it should create 7 tokens since no merges happened
+    let num_tokens = input.shape().dims();
+    assert_eq!(num_tokens, &[1, 3]);
+}
