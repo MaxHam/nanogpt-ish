@@ -6,6 +6,7 @@ use crate::bpe::{Token, Tokenizer};
 #[derive(Clone)]
 pub struct GPTConfig {
     vocab_size: usize,
+    max_seq_len: usize,
     n_embd: usize,
     device: Device,
 }
@@ -14,6 +15,7 @@ impl GPTConfig {
     pub fn default(vocab_size: usize) -> GPTConfig {
         GPTConfig {
             vocab_size,
+            max_seq_len: 32,
             n_embd: 32,
             device: Device::Cpu,
         }
@@ -23,6 +25,7 @@ impl GPTConfig {
 pub struct Transformer<'a> {
     pub config: &'a GPTConfig,
     tok_emb: Embedding,
+    pos_emb: Embedding,
     lm_head: Linear,
 }
 
@@ -44,8 +47,13 @@ impl<'a> Transformer<'a> {
     pub fn new(config: &'a GPTConfig) -> Result<Self> {
         // random initial weights
         let device = &config.device;
-        let vb = VarBuilder::zeros(DType::F32, &device);
-        let tok_emb = candle_nn::embedding(config.vocab_size, config.n_embd, vb.pp("tok_emb"))?;
+
+        let tok_emb_weights = Tensor::zeros((config.vocab_size, config.n_embd), DType::F32, device)?;
+        let tok_emb = Embedding::new(tok_emb_weights, config.n_embd);
+
+        let pos_emb_weights = Tensor::zeros((config.max_seq_len, config.n_embd), DType::F32, device)?;
+        let pos_emb = Embedding::new(pos_emb_weights, config.n_embd);
+    
         // weight tying, we reuse the token embedding for the lm_head
         // TODO: find out whether we can reuse the actual tensor and not just clone it, for efficiency sake
         let lm_head = Linear::new(tok_emb.embeddings().clone(), None);
@@ -53,23 +61,41 @@ impl<'a> Transformer<'a> {
         Ok(Self {
             config,
             tok_emb,
+            pos_emb,
             lm_head,
         })
     }
 
+    fn input_embedding(&self, idx: &Tensor) -> Result<Tensor> {
+        // This method takes care of adding up the token and positional embeddings
+        // representation = meaning(token emb) + location(position emb)
+        //
+        // I moved this part of the forward step here only to not clutter the main loop
+        let (batch, seq_len) = idx.dims2()?; 
+        assert!(seq_len <= self.config.max_seq_len, "sequence length exceeds block size");
+    
+        let tok = self.tok_emb.forward(idx)?;
+        let pos_idx = Tensor::arange(0u32, seq_len as u32, &idx.device())?.unsqueeze(0)?;
+        let pos = self.pos_emb.forward(&pos_idx)?;
+        
+        let x = (tok + pos)?;
+        let x2d = x.reshape((batch * seq_len, self.config.n_embd))?;
+    
+        Ok(x2d)
+    }
+
     fn forward(&self, idx: &Tensor) -> Result<Tensor> {
-        let x = self.tok_emb.forward(idx)?;
-        let (batch, tokens, embeddings) = x.dims3()?;
-        let x2d = x.reshape((batch * tokens, embeddings))?;
+        let x2d = self.input_embedding(idx)?;
         // (B*T, C)
 
         let logits2d = self.lm_head.forward(&x2d)?;
         // (B*T, V)
 
-        let logits = logits2d.reshape((batch, tokens, self.config.vocab_size))?;
+        let (batch, tokens) = idx.dims2()?;
+        let logits = logits2d.reshape((batch, tokens, self.config.vocab_size));
         // (B, T, V)
 
-        Ok(logits)
+        logits
     }
 
     pub fn generate(
