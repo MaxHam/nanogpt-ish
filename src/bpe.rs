@@ -124,7 +124,7 @@ impl Tokenizer {
         for token in &target_tokens {
             bytes.extend_from_slice(&token.value);
         }
-        String::from_utf8(bytes).unwrap()
+        String::from_utf8_lossy(&bytes).to_string()
     }
 
     pub fn train(corpus: &str, vocab_size: u16) -> Result<Tokenizer, &str> {
