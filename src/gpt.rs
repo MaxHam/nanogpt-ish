@@ -159,7 +159,7 @@ fn test_tok_emb_tieing() {
 
 #[test]
 fn test_generate() {
-    let tokenizer = Tokenizer::train("", 257).unwrap();
+    let tokenizer = Tokenizer::from_bytes();
     let config = GPTConfig::default(tokenizer.vocabulary.len());
     let prompt = "Hi";
     // When

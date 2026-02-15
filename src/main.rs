@@ -4,13 +4,7 @@ use llm_rs::gpt::{GPTConfig, Transformer};
 use llm_rs::bpe::{Tokenizer};
 
 fn main() -> anyhow::Result<()> {
-    let tokenizer = match Tokenizer::train("", 257) {
-        Ok(tok) => tok,
-        Err(e) => {
-            eprintln!("Failed to train tokenizer: {}", e);
-            return Ok(());
-        }
-    };
+    let tokenizer = Tokenizer::from_bytes();
     let config = GPTConfig::default(tokenizer.vocabulary.len());
     let model = Transformer::new(&config)?;
 

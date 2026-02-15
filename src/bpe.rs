@@ -41,7 +41,7 @@ pub struct Tokenizer {
 }
 
 impl Tokenizer {
-    fn from_bytes() -> Tokenizer {
+    pub fn from_bytes() -> Tokenizer {
         // init a vocab from the given u8 bytes
         let tokens: HashSet<Token> = (0u8..=255u8).map(Token::from_byte).collect();
         Tokenizer {
