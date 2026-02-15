@@ -35,7 +35,7 @@ impl Token {
 
 #[derive(PartialEq, Debug)]
 pub struct Tokenizer {
-    pub vocabulary: HashSet<Token>,
+    pub vocabulary: HashMap<u16, Token>,
     merge_rules: Vec<((Token, Token), u16)>,
     // (pair, merged_id), the rank of the merge rule is defind by its pos in the vector
 }
@@ -43,7 +43,10 @@ pub struct Tokenizer {
 impl Tokenizer {
     pub fn from_bytes() -> Tokenizer {
         // init a vocab from the given u8 bytes
-        let tokens: HashSet<Token> = (0u8..=255u8).map(Token::from_byte).collect();
+        let mut tokens: HashMap<u16, Token> = HashMap::new();
+        for id in 0u8..=255u8 {
+            tokens.insert(id as u16, Token::from_byte(id));
+        }
         Tokenizer {
             vocabulary: tokens,
             merge_rules: vec![],
@@ -57,26 +60,22 @@ impl Tokenizer {
 
         let mut tokenizer: Tokenizer = Tokenizer::from_bytes();
 
-        // Resolve token ids to actual Token structs (bytes 0-255 + merges in order)
-        let mut id_to_token: HashMap<u16, Token> = (0u16..=255u16)
-            .map(|id| (id, Token::from_byte(id as u8)))
-            .collect();
-
         let mut token_merge_rules: Vec<((Token, Token), u16)> = Vec::with_capacity(merge_rules.len());
 
         for ((a, b), token_id) in merge_rules {
-            let token_a = id_to_token
+            let token_a = tokenizer.vocabulary
+
                 .get(&a)
                 .unwrap_or_else(|| panic!("Token id {} not found when building merge rule for id {}", a, token_id))
                 .clone();
-            let token_b = id_to_token
+            let token_b = tokenizer.vocabulary
                 .get(&b)
                 .unwrap_or_else(|| panic!("Token id {} not found when building merge rule for id {}", b, token_id))
                 .clone();
 
             let pair = (token_a, token_b);
 
-            if !tokenizer.vocabulary.contains(&pair.0) || !tokenizer.vocabulary.contains(&pair.1) {
+            if !tokenizer.vocabulary.contains_key(&pair.0.id) || !tokenizer.vocabulary.contains_key(&pair.1.id) {
                 panic!(
                     "Token pair ({:?}, {:?}) not both present in vocabulary when applying merge rule for token_id {}.",
                     pair.0, pair.1, token_id
@@ -84,8 +83,7 @@ impl Tokenizer {
             }
 
             let new_token = Token::from_pair(&token_id, &pair);
-            tokenizer.vocabulary.insert(new_token.clone());
-            id_to_token.insert(token_id, new_token);
+            tokenizer.vocabulary.insert(token_id, new_token);
             token_merge_rules.push((pair, token_id));
         }
 
@@ -95,12 +93,12 @@ impl Tokenizer {
 
     pub fn to_json(&self) {
         // Map token ids to decoded UTF-8 strings for readable JSON
-        let vocab_strings: HashMap<u16, String> = self
+        let vocab_strings: HashMap<&u16, String> = self
             .vocabulary
             .iter()
-            .map(|token| match String::from_utf8(token.value.clone()) {
-                Ok(s) => (token.id, s),
-                Err(_) => (token.id, "UNKNOWN".to_string()),
+            .map(|(token_id,token)| match String::from_utf8(token.value.clone()) {
+                Ok(s) => (token_id, s),
+                Err(_) => (token_id, "UNKNOWN".to_string()),
             })
             .collect();
 
@@ -327,7 +325,7 @@ mod tests {
         // Then
         let merged_token =
             Token::from_pair(&256, &(Token::from_byte(b'b'), Token::from_byte(b'a')));
-        assert!(tokenizer.vocabulary.contains(&merged_token));
+        assert!(tokenizer.vocabulary.contains_key(&merged_token.id));
     }
 
     #[test]
@@ -393,11 +391,11 @@ mod tests {
         // Then
         // Vocabulary should contain all 256 base bytes plus 1 merged token
         assert_eq!(tokenizer.vocabulary.len(), 257);
-        assert!(tokenizer.vocabulary.contains(&Token::from_byte(b'f')));
+        assert!(tokenizer.vocabulary.contains_key(&Token::from_byte(b'f').id));
         assert!(
             tokenizer
                 .vocabulary
-                .contains(&Token::new(256, vec![b'b', b'a']))
+                .contains_key(&Token::new(256, vec![b'b', b'a']).id)
         );
     }
 

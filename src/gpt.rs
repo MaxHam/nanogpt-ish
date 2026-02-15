@@ -120,8 +120,7 @@ impl<'a> Transformer<'a> {
             // Convert id to token
             let next_token = tokenizer
                 .vocabulary
-                .iter()
-                .find(|t| t.id == next_id as u16)
+                .get(&(next_id as u16))
                 .cloned()
                 .expect("Token not found");
 
