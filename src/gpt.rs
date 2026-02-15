@@ -15,7 +15,7 @@ impl GPTConfig {
     pub fn default(vocab_size: usize) -> GPTConfig {
         GPTConfig {
             vocab_size,
-            max_seq_len: 32,
+            max_seq_len: 512,
             n_embd: 32,
             device: Device::Cpu,
         }
@@ -29,11 +29,11 @@ pub struct Transformer<'a> {
     lm_head: Linear,
 }
 
-trait CustomTokenizer {
+trait TokenTranslation {
     fn from_tokens(tokens: &[Token], device: &Device) -> Result<Tensor>;
 }
 
-impl CustomTokenizer for Tensor {
+impl TokenTranslation for Tensor {
     fn from_tokens(tokens: &[Token], device: &Device) -> Result<Tensor> {
         Tensor::from_vec(
             tokens.iter().map(|t| t.id as u32).collect::<Vec<u32>>(),
@@ -48,10 +48,10 @@ impl<'a> Transformer<'a> {
         // random initial weights
         let device = &config.device;
 
-        let tok_emb_weights = Tensor::zeros((config.vocab_size, config.n_embd), DType::F32, device)?;
+        let tok_emb_weights = Tensor::randn(0.5, 0.1f32, (config.vocab_size, config.n_embd), device)?;
         let tok_emb = Embedding::new(tok_emb_weights, config.n_embd);
 
-        let pos_emb_weights = Tensor::zeros((config.max_seq_len, config.n_embd), DType::F32, device)?;
+        let pos_emb_weights = Tensor::randn(0.5, 0.1f32, (config.max_seq_len, config.n_embd), device)?;
         let pos_emb = Embedding::new(pos_emb_weights, config.n_embd);
     
         // weight tying, we reuse the token embedding for the lm_head
@@ -72,7 +72,7 @@ impl<'a> Transformer<'a> {
         //
         // I moved this part of the forward step here only to not clutter the main loop
         let (batch, seq_len) = idx.dims2()?; 
-        assert!(seq_len <= self.config.max_seq_len, "sequence length exceeds block size");
+        assert!(seq_len <= self.config.max_seq_len, "sequence length exceeds max sequence length of {}", self.config.max_seq_len);
     
         let tok = self.tok_emb.forward(idx)?;
         let pos_idx = Tensor::arange(0u32, seq_len as u32, idx.device())?.unsqueeze(0)?;
