@@ -4,7 +4,7 @@ use llm_rs::gpt::{GPTConfig, Transformer};
 use llm_rs::bpe::{Tokenizer};
 
 fn main() -> anyhow::Result<()> {
-    let tokenizer = Tokenizer::from_bytes();
+    let tokenizer = Tokenizer::ascii();
     let config = GPTConfig::default(tokenizer.vocabulary.len());
     let model = Transformer::new(&config)?;
 

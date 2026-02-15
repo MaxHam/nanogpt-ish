@@ -53,6 +53,19 @@ impl Tokenizer {
         }
     }
 
+    pub fn ascii() -> Tokenizer {
+        // init a vocab from the given 128 ascii bytes
+        // this is useful for testing
+        let mut tokens: HashMap<u16, Token> = HashMap::new();
+        for id in 0u8..=128u8 {
+            tokens.insert(id as u16, Token::from_byte(id));
+        }
+        Tokenizer {
+            vocabulary: tokens,
+            merge_rules: vec![],
+        }
+    }
+
     pub fn from_merges(merge_rules: Vec<((u16, u16), u16)>) -> Tokenizer {
         if merge_rules.is_empty() {
             panic!("You need to train the byte pair encoder before you can get a vocabulary.");
