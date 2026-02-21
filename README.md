@@ -15,8 +15,7 @@ uv run gutenberg.py
 
 ## Roadmap
 - [x] Byte Pair Encoding
+- [x] Tokenizer 
 - [ ] Tokenize a big corpus
-- [ ] Generate vocab file
-- [ ] Tokenizer 
 - [ ] Dense Architecture LLM 
 - [ ] Mixture of Expert Architecture

@@ -21,12 +21,24 @@ impl GPTConfig {
         }
     }
 }
+#[derive(Clone, Copy)]
+struct Block {
+
+}
+
+
+impl Block {
+    fn forward(self, idx: Tensor) ->Result<Tensor>{
+        Ok(idx)
+    }
+}
 
 pub struct Transformer<'a> {
     pub config: &'a GPTConfig,
     tok_emb: Embedding,
     pos_emb: Embedding,
-    lm_head: Linear,
+    block: Block,
+    lm_head: Linear
 }
 
 trait TokenTranslation {
@@ -56,6 +68,8 @@ impl<'a> Transformer<'a> {
             Tensor::randn(0.5, 0.33f32, (config.max_seq_len, config.n_embd), device)?;
         let pos_emb = Embedding::new(pos_emb_weights, config.n_embd);
 
+        let block = Block {};
+
         // weight tying, we reuse the token embedding for the lm_head
         // TODO: find out whether we can reuse the actual tensor and not just clone it, for efficiency sake
         let lm_head = Linear::new(tok_emb.embeddings().clone(), None);
@@ -64,6 +78,7 @@ impl<'a> Transformer<'a> {
             config,
             tok_emb,
             pos_emb,
+            block,
             lm_head,
         })
     }
@@ -91,8 +106,10 @@ impl<'a> Transformer<'a> {
     }
 
     fn forward(&self, idx: &Tensor) -> Result<Tensor> {
-        let x2d = self.input_embedding(idx)?;
+        let mut x2d = self.input_embedding(idx)?;
         // (B*T, C)
+
+        x2d = self.block.forward(x2d)?;
 
         let logits2d = self.lm_head.forward(&x2d)?;
         // (B*T, V)
