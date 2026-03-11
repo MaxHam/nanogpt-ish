@@ -1,5 +1,5 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
-use candle_nn::{Embedding, Linear, Module};
+use candle_nn::{Embedding, LayerNorm, Linear, Module, ops::softmax};
 
 use crate::bpe::{Token, Tokenizer};
 
@@ -21,15 +21,104 @@ impl GPTConfig {
         }
     }
 }
-#[derive(Clone, Copy)]
-struct Block {
 
+#[derive(Clone)]
+struct SelfAttention {
+    q_proj: Linear,
+    k_proj: Linear,
+    v_proj: Linear,
 }
 
+impl SelfAttention {
+    fn new(n_embd: usize, device: Device) -> Result<Self> {
+        Ok(SelfAttention {
+            q_proj: Linear::new(
+                Tensor::randn(0.5, 0.25f32, (n_embd, n_embd), &device)?,
+                None,
+            ),
+            k_proj: Linear::new(
+                Tensor::randn(0.5, 0.25f32, (n_embd, n_embd), &device)?,
+                None,
+            ),
+            v_proj: Linear::new(
+                Tensor::randn(0.5, 0.25f32, (n_embd, n_embd), &device)?,
+                None,
+            ),
+        })
+    }
+    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let (b, t, _c) = x.dims3()?;
+
+        // Linear projections
+        let q = self.q_proj.forward(x)?;
+        let k = self.k_proj.forward(x)?;
+        let v = self.v_proj.forward(x)?;
+
+        // Attention scores: Q @ K^T / sqrt(d) — scale prevents softmax saturation
+        let scale = (x.dim(2)? as f64).sqrt();
+        let k_t = k.transpose(1, 2)?; // (b, t, c) -> (b, c, t)
+        let mut scores = (q.matmul(&k_t)? / scale)?;
+
+        // -------- Causal mask (lower triangular: attend to current and past only) --------
+        let device = x.device();
+        let row = Tensor::arange(0f32, t as f32, device)?
+            .unsqueeze(1)?
+            .broadcast_as((t, t))?;
+        let col = Tensor::arange(0f32, t as f32, device)?
+            .unsqueeze(0)?
+            .broadcast_as((t, t))?;
+        let mask = row.ge(&col)?.to_dtype(DType::F32)?;
+        let mask = mask.unsqueeze(0)?; // (t, t) -> (1, t, t) to match scores (b, t, t)
+
+        let neg_inf = Tensor::full(f32::NEG_INFINITY, (b, t, t), device)?;
+
+        let zero_mask = (mask.eq(0)?).to_dtype(DType::F32)?;
+        scores = ((scores * mask)? + (neg_inf * zero_mask)?)?;
+
+        // Softmax over last dim (keys)
+        let probs = softmax(&scores, scores.rank() - 1)?;
+
+        // Weighted sum
+        let attn_out = probs.matmul(&v)?;
+
+        Ok(attn_out)
+    }
+}
+
+#[derive(Clone)]
+struct Block {
+    // Layer Norm normalizes activations across the feature dimension.
+    // Values can grow very large and the layer norm forces it back to mean ~0 and variance ~1
+    ln1: LayerNorm,
+    ln2: LayerNorm,
+    attention: SelfAttention,
+    mlp: Linear
+}
 
 impl Block {
-    fn forward(self, idx: Tensor) ->Result<Tensor>{
-        Ok(idx)
+    fn new(n_embd: usize, device: &Device) -> Result<Self> {
+        let ln1_weights = Tensor::rand(0.0, 1.0f32, (n_embd,), device)?;
+        let ln2_weights = Tensor::rand(0.0, 1.0f32, (n_embd,), device)?;
+        let mlp_weights = Tensor::randn(0.0, 0.02f32, (n_embd, n_embd), device)?;
+        Ok(Block {
+            ln1: LayerNorm::new_no_bias(ln1_weights, 0.01),
+            ln2: LayerNorm::new_no_bias(ln2_weights, 0.01),
+            attention: SelfAttention::new(n_embd, device.clone())?,
+            mlp: Linear::new(mlp_weights, None)
+        })
+    }
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let x_norm = self.ln1.forward(x)?;
+
+        let attn_out = self.attention.forward(&x_norm)?;
+
+        let x = (x + attn_out)?;
+
+        let x_norm = self.ln2.forward(&x)?;
+        let mlp_out = self.mlp.forward(&x_norm)?;
+        let output = (x + mlp_out)?;
+
+        Ok(output)
     }
 }
 
@@ -38,7 +127,7 @@ pub struct Transformer<'a> {
     tok_emb: Embedding,
     pos_emb: Embedding,
     block: Block,
-    lm_head: Linear
+    lm_head: Linear,
 }
 
 trait TokenTranslation {
@@ -60,15 +149,16 @@ impl<'a> Transformer<'a> {
         // random initial weights
         let device = &config.device;
 
+        // Zero-mean init: avoids bias toward any token (e.g. space) with weight tying
         let tok_emb_weights =
-            Tensor::randn(0.5, 0.25f32, (config.vocab_size, config.n_embd), device)?;
+            Tensor::randn(0.0, 0.02f32, (config.vocab_size, config.n_embd), device)?;
         let tok_emb = Embedding::new(tok_emb_weights, config.n_embd);
 
         let pos_emb_weights =
-            Tensor::randn(0.5, 0.33f32, (config.max_seq_len, config.n_embd), device)?;
+            Tensor::randn(0.0, 0.02f32, (config.max_seq_len, config.n_embd), device)?;
         let pos_emb = Embedding::new(pos_emb_weights, config.n_embd);
 
-        let block = Block {};
+        let block = Block::new(32, device)?;
 
         // weight tying, we reuse the token embedding for the lm_head
         // TODO: find out whether we can reuse the actual tensor and not just clone it, for efficiency sake
@@ -88,7 +178,7 @@ impl<'a> Transformer<'a> {
         // representation = meaning(token emb) + location(position emb)
         //
         // I moved this part of the forward step here only to not clutter the main loop
-        let (batch, seq_len) = idx.dims2()?;
+        let (_batch, seq_len) = idx.dims2()?;
         assert!(
             seq_len <= self.config.max_seq_len,
             "sequence length exceeds max sequence length of {}",
@@ -100,25 +190,20 @@ impl<'a> Transformer<'a> {
         let pos = self.pos_emb.forward(&pos_idx)?;
 
         let x = (tok + pos)?;
-        let x2d = x.reshape((batch * seq_len, self.config.n_embd))?;
-
-        Ok(x2d)
+        // Keep (batch, seq_len, n_embd) for attention (needs 3D for Q@K^T)
+        Ok(x)
     }
 
     fn forward(&self, idx: &Tensor) -> Result<Tensor> {
-        let mut x2d = self.input_embedding(idx)?;
-        // (B*T, C)
+        let x = self.input_embedding(idx)?;
+        // (B, T, C)
 
-        x2d = self.block.forward(x2d)?;
+        let x = self.block.forward(&x)?;
 
-        let logits2d = self.lm_head.forward(&x2d)?;
-        // (B*T, V)
-
-        let (batch, tokens) = idx.dims2()?;
-
-        // (B, T, V)
-
-        logits2d.reshape((batch, tokens, self.config.vocab_size))
+        let (batch, seq_len, _) = x.dims3()?;
+        let x = x.reshape((batch * seq_len, self.config.n_embd))?;
+        let logits = self.lm_head.forward(&x)?;
+        logits.reshape((batch, seq_len, self.config.vocab_size))
     }
 
     pub fn generate(
