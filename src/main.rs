@@ -10,7 +10,7 @@ fn main() -> anyhow::Result<()> {
     let device = Device::Cpu;
     // let config = GPTConfig::default(tokenizer.vocabulary.len());
     // let model = Transformer::new(&config)?;
-    let model= Bigram::new(tokenizer.vocabulary.len(), &device)?;
+    let mut model= Bigram::new(tokenizer.vocabulary.len(), &device)?;
 
     println!("Chitchat with your GPT");
     println!("Type something and press enter. Ctrl+C to exit.\n");
