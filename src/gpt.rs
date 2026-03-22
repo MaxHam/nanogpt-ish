@@ -2,7 +2,7 @@ use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{Embedding, LayerNorm, Linear, Module, VarBuilder, VarMap, ops::{self, softmax}};
 use rand::rngs::ThreadRng;
 
-use crate::sampling::sample_multinomial;
+use crate::sampling::{sample_multinomial, Generator};
 
 #[derive(Clone)]
 struct SelfAttention {
@@ -188,8 +188,9 @@ impl Transformer {
         let logits = self.lm_head.forward(&x)?;
         logits.reshape((batch, seq_len, self.vocab_size))
     }
-
-    pub fn generate(&mut self, mut idx: Tensor, max_new_tokens: usize) -> Result<Tensor> {
+}
+impl Generator for Transformer {
+    fn generate(&mut self, mut idx: Tensor, max_new_tokens: usize) -> Result<Tensor> {
         // Takes in shape (batch, sequence)
         // Returns in shape (batch, sequence)
         // input tensor is updated in place

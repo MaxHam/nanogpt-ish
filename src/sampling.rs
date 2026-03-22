@@ -1,4 +1,4 @@
-use candle_core::Error;
+use candle_core::{Error, Tensor, Result};
 use rand::{
     distr::{Distribution, weighted::WeightedIndex},
     rngs::ThreadRng,
@@ -9,4 +9,9 @@ pub fn sample_multinomial(rng: &mut ThreadRng, prs: &Vec<f32>) -> candle_core::R
     let next_token = distribution.sample(rng) as u32;
 
     Ok(next_token)
+}
+
+
+pub trait Generator {
+    fn generate(&mut self, idx: Tensor, max_new_tokens: usize) -> Result<Tensor>;
 }

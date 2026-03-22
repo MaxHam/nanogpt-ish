@@ -4,7 +4,7 @@ use rand::{
     rngs::ThreadRng,
 };
 
-use crate::{dataset::Dataset, sampling::sample_multinomial};
+use crate::{dataset::Dataset, sampling::{Generator, sample_multinomial}};
 
 
 /// A simple Bigram language model.
@@ -66,7 +66,10 @@ impl Bigram {
         Ok(())
     }
 
-    pub fn generate(&mut self, mut idx: Tensor, max_new_tokens: usize) -> Result<Tensor> {
+}
+
+impl Generator for Bigram {
+    fn generate(&mut self, mut idx: Tensor, max_new_tokens: usize) -> Result<Tensor> {
         // Takes in shape (batch, sequence)
         // Returns in shape (batch, sequence)
         // input tensor is updated in place
