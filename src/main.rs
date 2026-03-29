@@ -5,6 +5,7 @@ use llm_rs::bigram::Bigram;
 use llm_rs::bpe::{TokenTranslation, Tokenizer};
 use llm_rs::dataset::Dataset;
 use llm_rs::sampling::Generator;
+use llm_rs::training::Training;
 
 fn main() -> anyhow::Result<()> {
     let tokenizer = Tokenizer::ascii();

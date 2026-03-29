@@ -5,6 +5,7 @@ use rand::{
 };
 
 use crate::{dataset::Dataset, sampling::{Generator, sample_multinomial}};
+use crate::{training::Training};
 
 
 /// A simple Bigram language model.
@@ -37,7 +38,11 @@ impl Bigram {
         })
     }
 
-    pub fn train(&self, dataset: &mut Dataset, num_epochs: usize, batch_size: usize) -> Result<()> {
+
+}
+
+impl Training for Bigram {
+    fn train(&self, dataset: &mut Dataset, num_epochs: usize, batch_size: usize) -> Result<()> {
         let params = ParamsAdamW {
             lr: 0.1, // set extra high so we can result fast in this toy example
             beta1: 0.9,
@@ -65,7 +70,6 @@ impl Bigram {
         }
         Ok(())
     }
-
 }
 
 impl Generator for Bigram {
