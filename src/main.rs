@@ -4,6 +4,7 @@ use candle_core::{Device, IndexOp, Tensor};
 use llm_rs::bigram::Bigram;
 use llm_rs::bpe::{TokenTranslation, Tokenizer};
 use llm_rs::dataset::Dataset;
+use llm_rs::sampling::Generator;
 
 fn main() -> anyhow::Result<()> {
     let tokenizer = Tokenizer::ascii();

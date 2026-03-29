@@ -1,5 +1,8 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
-use candle_nn::{Embedding, LayerNorm, Linear, Module, VarBuilder, VarMap, ops::{self, softmax}};
+use candle_nn::{
+    ops::{self, softmax},
+    Embedding, LayerNorm, Linear, Module, VarBuilder, VarMap,
+};
 use rand::rngs::ThreadRng;
 
 use crate::sampling::{sample_multinomial, Generator};
@@ -77,7 +80,7 @@ struct Block {
     ln1: LayerNorm,
     ln2: LayerNorm,
     attention: SelfAttention,
-    mlp: Linear
+    mlp: Linear,
 }
 
 impl Block {
@@ -89,21 +92,8 @@ impl Block {
             ln1: LayerNorm::new_no_bias(ln1_weights, 0.01),
             ln2: LayerNorm::new_no_bias(ln2_weights, 0.01),
             attention: SelfAttention::new(n_embd, device.clone())?,
-            mlp: Linear::new(mlp_weights, None)
+            mlp: Linear::new(mlp_weights, None),
         })
-    }
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let x_norm = self.ln1.forward(x)?;
-
-        let attn_out = self.attention.forward(&x_norm)?;
-
-        let x = (x + attn_out)?;
-
-        let x_norm = self.ln2.forward(&x)?;
-        let mlp_out = self.mlp.forward(&x_norm)?;
-        let output = (x + mlp_out)?;
-
-        Ok(output)
     }
 }
 
@@ -119,13 +109,18 @@ pub struct Transformer {
 }
 
 impl Transformer {
-    pub fn new(vocab_size: usize, device: &Device, max_seq_len: usize, n_emb: usize) -> Result<Self> {
+    pub fn new(
+        vocab_size: usize,
+        device: &Device,
+        max_seq_len: usize,
+        n_emb: usize,
+    ) -> Result<Self> {
         let mut var_map = VarMap::new();
         let vb = VarBuilder::from_varmap(&mut var_map, DType::F32, device);
 
         // Zero-mean init: avoids bias toward any token (e.g. space) with weight tying
         let tok_emb_weights = vb.get((vocab_size, n_emb), "tok_emb")?;
-        let pos_emb_weights  = vb.get((max_seq_len, n_emb), "pos_emb")?;
+        let pos_emb_weights = vb.get((max_seq_len, n_emb), "pos_emb")?;
         let tok_emb = Embedding::new(tok_emb_weights, n_emb);
         let pos_emb = Embedding::new(pos_emb_weights, n_emb);
 
@@ -147,13 +142,8 @@ impl Transformer {
         })
     }
 
-    fn default(device: &Device)->Result<Self> {
-        Transformer::new(
-            64,
-            device,
-            512,
-            32,
-        )
+    fn default(device: &Device) -> Result<Self> {
+        Transformer::new(64, device, 512, 32)
     }
 
     fn input_embedding(&self, idx: &Tensor) -> Result<Tensor> {
@@ -176,19 +166,8 @@ impl Transformer {
         // Keep (batch, seq_len, n_embd) for attention (needs 3D for Q@K^T)
         Ok(x)
     }
-
-    fn forward(&self, idx: &Tensor) -> Result<Tensor> {
-        let x = self.input_embedding(idx)?;
-        // (B, T, C)
-
-        let x = self.block.forward(&x)?;
-
-        let (batch, seq_len, _) = x.dims3()?;
-        let x = x.reshape((batch * seq_len, self.n_emb))?;
-        let logits = self.lm_head.forward(&x)?;
-        logits.reshape((batch, seq_len, self.vocab_size))
-    }
 }
+
 impl Generator for Transformer {
     fn generate(&mut self, mut idx: Tensor, max_new_tokens: usize) -> Result<Tensor> {
         // Takes in shape (batch, sequence)
@@ -207,6 +186,36 @@ impl Generator for Transformer {
             idx = Tensor::cat(&[&idx, &next_tensor], 1)?;
         }
         Ok(idx)
+    }
+}
+
+impl Module for Transformer {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let x = self.input_embedding(xs)?;
+        // (B, T, C)
+
+        let x = self.block.forward(&x)?;
+
+        let (batch, seq_len, _) = x.dims3()?;
+        let x = x.reshape((batch * seq_len, self.n_emb))?;
+        let logits = self.lm_head.forward(&x)?;
+        logits.reshape((batch, seq_len, self.vocab_size))
+    }
+}
+
+impl Module for Block {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let x_norm = self.ln1.forward(xs)?;
+
+        let attn_out = self.attention.forward(&x_norm)?;
+
+        let x = (xs + attn_out)?;
+
+        let x_norm = self.ln2.forward(&x)?;
+        let mlp_out = self.mlp.forward(&x_norm)?;
+        let output = (x + mlp_out)?;
+
+        Ok(output)
     }
 }
 
@@ -234,20 +243,20 @@ fn test_tok_emb_tieing() {
     assert_eq!(shape.dims(), &[1, 4, model.vocab_size]);
 }
 
-    #[test]
-    fn test_generate_shape() -> Result<()> {
-        // Given
-        let device = Device::Cpu;
-        let mut model = Transformer::default(&device).unwrap();
-        let max_new_tokens = 1;
-        let seq_len = 3;
-        let idx = Tensor::from_slice(&[0u32, 1, 2], &[1, 3], &device)?; // seq_len=3
+#[test]
+fn test_generate_shape() -> Result<()> {
+    // Given
+    let device = Device::Cpu;
+    let mut model = Transformer::default(&device).unwrap();
+    let max_new_tokens = 1;
+    let seq_len = 3;
+    let idx = Tensor::from_slice(&[0u32, 1, 2], &[1, 3], &device)?; // seq_len=3
 
-        // When
-        let output_idx = model.generate(idx, 1)?;
+    // When
+    let output_idx = model.generate(idx, 1)?;
 
-        // Then
-        assert_eq!(output_idx.shape().dims(), &[1, seq_len+max_new_tokens]); // (batch, seq_len)
+    // Then
+    assert_eq!(output_idx.shape().dims(), &[1, seq_len + max_new_tokens]); // (batch, seq_len)
 
-        Ok(())
-    }
+    Ok(())
+}
