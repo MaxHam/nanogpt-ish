@@ -76,7 +76,7 @@ struct Block {
     ln1: LayerNorm,
     ln2: LayerNorm,
     attention_heads: Vec<SelfAttention>,
-    mlp: Linear,
+    feedforward: FeedForward,
 }
 
 impl Block {
@@ -88,15 +88,33 @@ impl Block {
                 SelfAttention::new(n_embd, n_embd / num_heads, vb.pp("attn"))?;
                 num_heads
             ],
-            mlp: linear_no_bias(n_embd, n_embd, vb.pp("mlp"))?,
+            feedforward: FeedForward::new(n_embd, vb.pp("ff"))?
         })
+    }
+}
+
+#[derive(Clone)]
+struct FeedForward {
+    linear: Linear,
+}
+
+impl FeedForward {
+    fn new(n_embd:  usize, vb: VarBuilder) -> Result<Self> {
+        Ok(Self {
+            linear: linear_no_bias(n_embd, n_embd, vb.pp("fc1"))?,
+        })
+    }
+
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let x = self.linear.forward(x)?;
+        x.relu()
     }
 }
 
 pub struct Transformer {
     tok_emb: Embedding,
     pos_emb: Embedding,
-    block: Block,
+    blocks: Vec<Block>,
     lm_head: Linear,
     max_seq_len: usize,
     vocab_size: usize,
@@ -111,6 +129,7 @@ impl Transformer {
         device: &Device,
         max_seq_len: usize,
         n_emb: usize,
+        n_blocks: usize
     ) -> Result<Self> {
         let mut var_map = VarMap::new();
         let vb = VarBuilder::from_varmap(&mut var_map, DType::F32, device);
@@ -123,8 +142,10 @@ impl Transformer {
         let pos_emb_weights = vb.get_with_hints((max_seq_len, n_emb), "pos_emb", emb_init)?;
         let tok_emb = Embedding::new(tok_emb_weights, n_emb);
         let pos_emb = Embedding::new(pos_emb_weights, n_emb);
-
-        let block = Block::new(n_emb, 4, vb.pp("block"))?;
+        let mut blocks = Vec::with_capacity(n_blocks);
+        for i in 0..n_blocks {
+            blocks.push(Block::new(n_emb, 4, vb.pp(format!("block_{i}")))?);
+        }
 
         // weight tying, we reuse the token embedding for the lm_head
         // TODO: find out whether we can reuse the actual tensor and not just clone it, for efficiency sake
@@ -133,7 +154,7 @@ impl Transformer {
         Ok(Self {
             tok_emb,
             pos_emb,
-            block,
+            blocks,
             lm_head,
             max_seq_len,
             vocab_size,
@@ -144,7 +165,7 @@ impl Transformer {
     }
 
     fn default(device: &Device) -> Result<Self> {
-        Transformer::new(64, device, 512, 32)
+        Transformer::new(64, device, 512, 32, 1)
     }
 
     fn input_embedding(&self, idx: &Tensor) -> Result<Tensor> {
@@ -225,13 +246,15 @@ impl Generator for Transformer {
 
 impl Module for Transformer {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let x = self.input_embedding(xs)?;
+        let mut x = self.input_embedding(xs)?;
         // (B, T, C)
 
-        let x = self.block.forward(&x)?;
+        for block in &self.blocks {
+            x = block.forward(&x)?;
+        }
 
         let (batch, seq_len, _) = x.dims3()?;
-        let x = x.reshape((batch * seq_len, self.n_emb))?;
+        x = x.reshape((batch * seq_len, self.n_emb))?;
         let logits = self.lm_head.forward(&x)?;
         logits.reshape((batch, seq_len, self.vocab_size))
     }
@@ -250,8 +273,8 @@ impl Module for Block {
         let x = (xs + attn_out)?;
 
         let x_norm = self.ln2.forward(&x)?;
-        let mlp_out = self.mlp.forward(&x_norm)?;
-        let output = (x + mlp_out)?;
+        let ff_out = self.feedforward.forward(&x_norm)?;
+        let output = (x + ff_out)?;
 
         Ok(output)
     }

@@ -13,6 +13,12 @@ uv sync
 uv run gutenberg.py
 ```
 
+## How to use
+Run 
+```shell
+cargo run --release # for optimal compilation and fast training
+```
+
 ## Roadmap
 - [x] Byte Pair Encoding
 - [x] Tokenizer 

@@ -14,7 +14,7 @@ fn main() -> anyhow::Result<()> {
     let vocab_size = 512u16;
     let tokenizer = Tokenizer::train(&corpus, vocab_size).expect("failed to train tokenizer");
     let device = Device::Cpu;
-    let mut model = Transformer::new(tokenizer.vocabulary.len(), &device, 64, 32)?;
+    let mut model = Transformer::new(tokenizer.vocabulary.len(), &device, 64, 32, 4)?;
     let mut dataset = Dataset::from_file("./data/shakespeare.txt", 0.9, &tokenizer)?;
 
     model.train(&mut dataset, 1024, 16)?;
