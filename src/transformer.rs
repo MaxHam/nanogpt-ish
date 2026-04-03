@@ -70,25 +70,57 @@ impl SelfAttention {
 }
 
 #[derive(Clone)]
+struct MultiHeadAttention {
+    heads: Vec<SelfAttention>,
+    proj: Linear,
+}
+
+impl MultiHeadAttention {
+    fn new(n_heads: usize, n_embd: usize, vb: &VarBuilder) -> Result<Self> {
+        let mut heads = Vec::with_capacity(n_heads);
+        for i in 0..n_heads {
+            heads.push(SelfAttention::new(
+                n_embd,
+                n_embd / n_heads,
+                vb.pp(format!("attn_{i}")),
+            )?);
+        }
+        Ok(MultiHeadAttention {
+            heads,
+            proj: linear_no_bias(n_embd, n_embd, vb.clone())?,
+        })
+    }
+}
+
+impl Module for MultiHeadAttention {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let attention_head_outputs: Vec<Tensor> = self
+            .heads
+            .iter()
+            .map(|h| h.forward(&xs))
+            .collect::<Result<Vec<_>>>()?;
+        let attn_out = Tensor::cat(&attention_head_outputs, 2)?;
+        self.proj.forward(&attn_out)
+    }
+}
+
+#[derive(Clone)]
 struct Block {
     // Layer Norm normalizes activations across the feature dimension.
     // Values can grow very large and the layer norm forces it back to mean ~0 and variance ~1
     ln1: LayerNorm,
     ln2: LayerNorm,
-    attention_heads: Vec<SelfAttention>,
+    multihead_attention: MultiHeadAttention,
     feedforward: FeedForward,
 }
 
 impl Block {
-    fn new(n_embd: usize, num_heads: usize, vb: VarBuilder<'_>) -> Result<Self> {
+    fn new(n_embd: usize, n_heads: usize, vb: VarBuilder<'_>) -> Result<Self> {
         Ok(Block {
             ln1: layer_norm_no_bias(n_embd, 0.01, vb.pp("ln1"))?,
             ln2: layer_norm_no_bias(n_embd, 0.01, vb.pp("ln2"))?,
-            attention_heads: vec![
-                SelfAttention::new(n_embd, n_embd / num_heads, vb.pp("attn"))?;
-                num_heads
-            ],
-            feedforward: FeedForward::new(n_embd, vb.pp("ff"))?
+            multihead_attention: MultiHeadAttention::new(n_heads, n_embd, &vb.pp("mha"))?,
+            feedforward: FeedForward::new(n_embd, vb.pp("ff"))?,
         })
     }
 }
@@ -99,7 +131,7 @@ struct FeedForward {
 }
 
 impl FeedForward {
-    fn new(n_embd:  usize, vb: VarBuilder) -> Result<Self> {
+    fn new(n_embd: usize, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
             linear: linear_no_bias(n_embd, n_embd, vb.pp("fc1"))?,
         })
@@ -129,7 +161,7 @@ impl Transformer {
         device: &Device,
         max_seq_len: usize,
         n_emb: usize,
-        n_blocks: usize
+        n_blocks: usize,
     ) -> Result<Self> {
         let mut var_map = VarMap::new();
         let vb = VarBuilder::from_varmap(&mut var_map, DType::F32, device);
@@ -263,13 +295,7 @@ impl Module for Transformer {
 impl Module for Block {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let x_norm = self.ln1.forward(xs)?;
-        let attention_head_outputs: Vec<Tensor> = self
-            .attention_heads
-            .iter()
-            .map(|h| h.forward(&x_norm))
-            .collect::<Result<Vec<_>>>()?;
-        let attn_out = Tensor::cat(&attention_head_outputs, 2)?;
-
+        let attn_out = self.multihead_attention.forward(&x_norm)?;
         let x = (xs + attn_out)?;
 
         let x_norm = self.ln2.forward(&x)?;
@@ -314,10 +340,14 @@ impl Training for Transformer {
             // validation
             let (validation_inputs, validation_targets) =
                 dataset.validation_batch(self.max_seq_len, batch_size)?;
-            let validation_logits = self.forward(&validation_inputs)?; 
-            let (val_batch_size, val_time_size, val_channel_size) = validation_logits.shape().dims3()?;
+            let validation_logits = self.forward(&validation_inputs)?;
+            let (val_batch_size, val_time_size, val_channel_size) =
+                validation_logits.shape().dims3()?;
             let validation_loss = loss::cross_entropy(
-                &logits.reshape(Shape::from((val_batch_size * val_time_size, val_channel_size)))?,
+                &logits.reshape(Shape::from((
+                    val_batch_size * val_time_size,
+                    val_channel_size,
+                )))?,
                 &&validation_targets.reshape(Shape::from((val_batch_size * val_time_size,)))?,
             )?;
             println!(
