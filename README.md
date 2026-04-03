@@ -17,5 +17,5 @@ uv run gutenberg.py
 - [x] Byte Pair Encoding
 - [x] Tokenizer 
 - [ ] Tokenize a big corpus
-- [ ] Dense Architecture LLM 
+- [x] Dense Architecture LLM 
 - [ ] Mixture of Expert Architecture

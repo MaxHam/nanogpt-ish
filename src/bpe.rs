@@ -43,6 +43,16 @@ pub struct Tokenizer {
 }
 
 impl Tokenizer {
+    pub fn is_ascii(&self) -> bool {
+        // `Tokenizer::ascii()` builds a vocab of bytes 0..=127 only.
+        // This is useful for deciding whether we should drop non-ascii bytes
+        // when loading training text.
+        if self.vocabulary.len() != 128 {
+            return false;
+        }
+        (0u16..=127u16).all(|id| self.vocabulary.contains_key(&id))
+    }
+
     pub fn from_bytes() -> Tokenizer {
         // init a vocab from the given u8 bytes
         let mut tokens: HashMap<u16, Token> = HashMap::new();

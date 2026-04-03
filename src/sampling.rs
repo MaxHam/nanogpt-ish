@@ -13,5 +13,11 @@ pub fn sample_multinomial(rng: &mut ThreadRng, prs: &Vec<f32>) -> candle_core::R
 
 
 pub trait Generator {
-    fn generate(&mut self, idx: Tensor, max_new_tokens: usize) -> Result<Tensor>;
+    fn generate(
+        &mut self,
+        idx: Tensor,
+        max_new_tokens: usize,
+        temperature: f32,
+        top_k: usize,
+    ) -> Result<Tensor>;
 }

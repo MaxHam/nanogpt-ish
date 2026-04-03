@@ -54,8 +54,13 @@ impl Dataset {
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
 
-        // UGLY FIX: Filter out all char bytes that are >128 so that it works with `Tokenizer::ascii`
-        let contents = filter_ascii(&contents.as_str());
+        // If we are using `Tokenizer::ascii()`, it can't represent bytes > 127.
+        // For byte-level BPE tokenizers, we keep the full text.
+        let contents = if tokenizer.is_ascii() {
+            filter_ascii(&contents.as_str())
+        } else {
+            contents
+        };
         let tokens = tokenizer.encode(&contents);
 
         let data = Tensor::from_tokens(&tokens, &Device::Cpu)?;

@@ -8,10 +8,14 @@ use llm_rs::sampling::Generator;
 use llm_rs::training::Training;
 
 fn main() -> anyhow::Result<()> {
-    let tokenizer = Tokenizer::ascii();
+    let corpus = std::fs::read_to_string("./data/shakespeare.txt")?;
+    // Small vocab + small model so we can train on CPU quickly.
+    // Byte-level BPE generally improves "speaking" a lot vs ASCII tokens.
+    let vocab_size = 320u16;
+    let tokenizer = Tokenizer::train(&corpus, vocab_size).expect("failed to train tokenizer");
     let device = Device::Cpu;
-    let mut model = Transformer::new(tokenizer.vocabulary.len(),&device, 128, 32)?;
-    let mut dataset = Dataset::from_file("./data/gutenberg_txts/corpus.txt", 0.8, &tokenizer)?;
+    let mut model = Transformer::new(tokenizer.vocabulary.len(), &device, 64, 192)?;
+    let mut dataset = Dataset::from_file("./data/shakespeare.txt", 0.9, &tokenizer)?;
     println!(
         "Training data shape: {:?}, dtype: {:?}",
         dataset.training_data.shape(),
@@ -29,7 +33,7 @@ fn main() -> anyhow::Result<()> {
         &dataset.training_data.i(0..block_size).unwrap(),
         tokenizer.decode(&dataset.training_data.i(0..block_size).unwrap().to_tokens(&tokenizer))
     );
-    model.train(&mut dataset, 512, 128)?;
+    model.train(&mut dataset, 1024, 16)?;
 
     println!("Chitchat with your GPT");
     println!("Type something and press enter. Ctrl+C to exit.\n");
@@ -46,11 +50,12 @@ fn main() -> anyhow::Result<()> {
         if input.is_empty() {
             continue;
         }
+
         let encoded = tokenizer.encode(input);
         let mut input = Tensor::from_tokens(&encoded, &device)?;
         input = input.unsqueeze(0)?; // add batch back in (1, S)
 
-        let output = model.generate(input, 32)?;
+        let output = model.generate(input, 32, 0.9, 40)?;
         let decoded = tokenizer.decode(&output.to_tokens(&tokenizer));
 
         println!("{decoded}\n");

@@ -2,7 +2,7 @@ use candle_core::{DType, Device, IndexOp, Result, Shape, Tensor};
 use candle_nn::{
     AdamW, Embedding, Init, LayerNorm, Linear, Module, Optimizer, ParamsAdamW, VarBuilder, VarMap,
     layer_norm_no_bias, linear_no_bias, loss,
-    ops::{self, softmax},
+    ops::softmax,
 };
 use rand::rngs::ThreadRng;
 
@@ -169,18 +169,50 @@ impl Transformer {
 }
 
 impl Generator for Transformer {
-    fn generate(&mut self, mut idx: Tensor, max_new_tokens: usize) -> Result<Tensor> {
+    fn generate(
+        &mut self,
+        mut idx: Tensor,
+        max_new_tokens: usize,
+        temperature: f32,
+        top_k: usize,
+    ) -> Result<Tensor> {
         // Takes in shape (batch, sequence)
         // Returns in shape (batch, sequence)
         // input tensor is updated in place
+        // Note: this REPL-style generator is tuned for `batch=1`.
+
         for _ in 0..max_new_tokens {
             let logits = self.forward(&idx)?; // (batch, seq_len, vocab)
             let (_, seq_len, _) = logits.dims3()?;
             let last_logits = logits.i((.., seq_len - 1, ..))?; // (batch, vocab)
-            let probabilities = ops::softmax(&last_logits, 1)?; // (128)
-            let probabilities = probabilities.squeeze(0)?;
-            let probs_vec = probabilities.to_vec1()?;
-            let next_token = sample_multinomial(&mut self.rng, &probs_vec)?;
+
+            // REPL generator is tuned for `batch=1`.
+            let last_logits = last_logits.squeeze(0)?; // (vocab)
+            let temp = temperature.max(1e-5);
+            let temp_tensor = Tensor::new(temp, last_logits.device())?;
+            let scaled_logits = last_logits.broadcast_div(&temp_tensor)?;
+            let vocab = scaled_logits.dim(0)?;
+
+            // Apply top-k using Candle tensor ops, then sample from the (k) probs.
+            let next_token = if top_k > 0 && top_k < vocab {
+                // Indices sorted descending by logit.
+                let topk_indices = scaled_logits
+                    .arg_sort_last_dim(false)?
+                    .narrow(0, 0, top_k)?
+                    .contiguous()?;
+                let topk_logits = scaled_logits.gather(&topk_indices, 0)?;
+                let probs = softmax(&topk_logits, 0)?;
+                let probs_vec: Vec<f32> = probs.to_vec1()?;
+                let sampled_in_topk = sample_multinomial(&mut self.rng, &probs_vec)? as usize;
+                let topk_idx_vec: Vec<u32> = topk_indices.to_vec1::<u32>()?;
+                topk_idx_vec[sampled_in_topk]
+            } else {
+                // No top-k filtering: sample from full softmax.
+                let probs = softmax(&scaled_logits, 0)?;
+                let probs_vec: Vec<f32> = probs.to_vec1()?;
+                sample_multinomial(&mut self.rng, &probs_vec)?
+            };
+
             // reshape to [1,1]
             let next_tensor = Tensor::from_slice(&[next_token], &[1, 1], &idx.device())?;
             idx = Tensor::cat(&[&idx, &next_tensor], 1)?;
@@ -222,7 +254,7 @@ impl Module for Block {
 impl Training for Transformer {
     fn train(&self, dataset: &mut Dataset, num_epochs: usize, batch_size: usize) -> Result<()> {
         let params = ParamsAdamW {
-            lr: 0.1, // set extra high so we can result fast in this toy example
+            lr: 1e-3,
             beta1: 0.9,
             beta2: 0.999,
             eps: 1e-8,
@@ -284,7 +316,7 @@ fn test_generate_shape() -> Result<()> {
     let idx = Tensor::from_slice(&[0u32, 1, 2], &[1, 3], &device)?; // seq_len=3
 
     // When
-    let output_idx = model.generate(idx, 1)?;
+    let output_idx = model.generate(idx, 1, 1.0, 0)?;
 
     // Then
     assert_eq!(output_idx.shape().dims(), &[1, seq_len + max_new_tokens]); // (batch, seq_len)
