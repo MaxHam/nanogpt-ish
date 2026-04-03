@@ -287,9 +287,20 @@ impl Training for Transformer {
                 &logits.reshape(Shape::from((batch_size * time_size, channel_size)))?,
                 &training_targets.reshape(Shape::from((batch_size * time_size,)))?,
             )?;
+
+            // validation
+            let (validation_inputs, validation_targets) =
+                dataset.validation_batch(self.max_seq_len, batch_size)?;
+            let validation_logits = self.forward(&validation_inputs)?; 
+            let (val_batch_size, val_time_size, val_channel_size) = validation_logits.shape().dims3()?;
+            let validation_loss = loss::cross_entropy(
+                &logits.reshape(Shape::from((val_batch_size * val_time_size, val_channel_size)))?,
+                &&validation_targets.reshape(Shape::from((val_batch_size * val_time_size,)))?,
+            )?;
             println!(
-                "Epoch: {epoch:3} Train loss: {:8.5}",
-                loss.to_scalar::<f32>()?
+                "Epoch: {epoch:3}/{num_epochs:3} Train loss: {:8.5}, Validation loss: {:8.5}",
+                loss.to_scalar::<f32>()?,
+                validation_loss.to_scalar::<f32>()?
             );
         }
         Ok(())

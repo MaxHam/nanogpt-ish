@@ -201,7 +201,7 @@ impl Tokenizer {
         let mut next_token_id: u16 = 256;
 
         for (i, _) in (0..num_merges).enumerate() {
-            eprintln!("Merge {}/{}", i + 1, num_merges);
+            println!("Merge: {:3}/{:3}", i + 1, num_merges);
             // find the most frequent pair
             // if its stale then we discard it (lazy deletion)
             let most_frequent_pair = loop {

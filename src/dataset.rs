@@ -91,6 +91,30 @@ impl Dataset {
 
         Ok((stacked_contexts, stacked_targets))
     }
+    pub fn validation_batch(
+        &self,
+        block_size: usize,
+        batch_size: usize,
+    ) -> Result<(Tensor, Tensor)> {
+        // evenly spaced indices across validation set
+        let step = (self.validation_size - block_size) / batch_size;
+    
+        let indices: Vec<usize> = (0..batch_size)
+            .map(|i| i * step)
+            .collect();
+    
+        let contexts = indices.iter().map(|&idx| {
+            self.validation_data.i(idx..idx + block_size).unwrap()
+        });
+        let stacked_contexts = Tensor::stack(&contexts.collect::<Vec<_>>(), 0)?;
+    
+        let targets = indices.iter().map(|&idx| {
+            self.validation_data.i(idx + 1..idx + block_size + 1).unwrap()
+        });
+        let stacked_targets = Tensor::stack(&targets.collect::<Vec<_>>(), 0)?;
+    
+        Ok((stacked_contexts, stacked_targets))
+    }
 }
 
 
