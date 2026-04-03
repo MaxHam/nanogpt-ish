@@ -1,8 +1,7 @@
 use candle_core::{DType, Device, IndexOp, Result, Shape, Tensor};
 use candle_nn::{
     AdamW, Embedding, Init, LayerNorm, Linear, Module, Optimizer, ParamsAdamW, VarBuilder, VarMap,
-    layer_norm_no_bias, linear_no_bias, loss,
-    ops::softmax,
+    layer_norm_no_bias, linear_no_bias, loss, ops::softmax,
 };
 use rand::rngs::ThreadRng;
 
@@ -20,11 +19,11 @@ struct SelfAttention {
 }
 
 impl SelfAttention {
-    fn new(n_embd: usize, vb: VarBuilder<'_>) -> Result<Self> {
+    fn new(n_embd: usize, head_size: usize, vb: VarBuilder<'_>) -> Result<Self> {
         Ok(SelfAttention {
-            q_proj: linear_no_bias(n_embd, n_embd, vb.pp("q_proj"))?,
-            k_proj: linear_no_bias(n_embd, n_embd, vb.pp("k_proj"))?,
-            v_proj: linear_no_bias(n_embd, n_embd, vb.pp("v_proj"))?,
+            q_proj: linear_no_bias(n_embd, head_size, vb.pp("q_proj"))?,
+            k_proj: linear_no_bias(n_embd, head_size, vb.pp("k_proj"))?,
+            v_proj: linear_no_bias(n_embd, head_size, vb.pp("v_proj"))?,
         })
     }
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
@@ -76,16 +75,19 @@ struct Block {
     // Values can grow very large and the layer norm forces it back to mean ~0 and variance ~1
     ln1: LayerNorm,
     ln2: LayerNorm,
-    attention: SelfAttention,
+    attention_heads: Vec<SelfAttention>,
     mlp: Linear,
 }
 
 impl Block {
-    fn new(n_embd: usize, vb: VarBuilder<'_>) -> Result<Self> {
+    fn new(n_embd: usize, num_heads: usize, vb: VarBuilder<'_>) -> Result<Self> {
         Ok(Block {
             ln1: layer_norm_no_bias(n_embd, 0.01, vb.pp("ln1"))?,
             ln2: layer_norm_no_bias(n_embd, 0.01, vb.pp("ln2"))?,
-            attention: SelfAttention::new(n_embd, vb.pp("attn"))?,
+            attention_heads: vec![
+                SelfAttention::new(n_embd, n_embd / num_heads, vb.pp("attn"))?;
+                num_heads
+            ],
             mlp: linear_no_bias(n_embd, n_embd, vb.pp("mlp"))?,
         })
     }
@@ -122,7 +124,7 @@ impl Transformer {
         let tok_emb = Embedding::new(tok_emb_weights, n_emb);
         let pos_emb = Embedding::new(pos_emb_weights, n_emb);
 
-        let block = Block::new(n_emb, vb.pp("block"))?;
+        let block = Block::new(n_emb, 4, vb.pp("block"))?;
 
         // weight tying, we reuse the token embedding for the lm_head
         // TODO: find out whether we can reuse the actual tensor and not just clone it, for efficiency sake
@@ -238,8 +240,12 @@ impl Module for Transformer {
 impl Module for Block {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let x_norm = self.ln1.forward(xs)?;
-
-        let attn_out = self.attention.forward(&x_norm)?;
+        let attention_head_outputs: Vec<Tensor> = self
+            .attention_heads
+            .iter()
+            .map(|h| h.forward(&x_norm))
+            .collect::<Result<Vec<_>>>()?;
+        let attn_out = Tensor::cat(&attention_head_outputs, 2)?;
 
         let x = (xs + attn_out)?;
 
@@ -273,6 +279,14 @@ impl Training for Transformer {
             )?;
             optimizer.backward_step(&loss)?;
 
+            let (training_inputs, training_targets) =
+                dataset.random_training_batch(self.max_seq_len, batch_size)?;
+            let logits = self.forward(&training_inputs)?;
+            let (batch_size, time_size, channel_size) = logits.shape().dims3()?;
+            let loss = loss::cross_entropy(
+                &logits.reshape(Shape::from((batch_size * time_size, channel_size)))?,
+                &training_targets.reshape(Shape::from((batch_size * time_size,)))?,
+            )?;
             println!(
                 "Epoch: {epoch:3} Train loss: {:8.5}",
                 loss.to_scalar::<f32>()?
@@ -320,6 +334,44 @@ fn test_generate_shape() -> Result<()> {
 
     // Then
     assert_eq!(output_idx.shape().dims(), &[1, seq_len + max_new_tokens]); // (batch, seq_len)
+
+    Ok(())
+}
+
+#[test]
+fn test_attention_head_shape() -> Result<()> {
+    // Given
+    let device = Device::Cpu;
+    let var_map = VarMap::new();
+    let vb = VarBuilder::from_varmap(&var_map, DType::F32, &device);
+    let attn = SelfAttention::new(8, 8, vb).unwrap();
+    let idx = Tensor::zeros((1, 32, 8), DType::F32, &device)?;
+
+    // When
+    let output_idx = attn.forward(&idx)?;
+
+    // Then input_dim = output_dim
+    assert_eq!(*output_idx.shape().dims(), *idx.shape().dims());
+
+    Ok(())
+}
+
+#[test]
+fn test_block_shape() -> Result<()> {
+    // Given
+    let device = Device::Cpu;
+    let var_map = VarMap::new();
+    let n_embd = 8;
+    let n_heads = 4;
+    let vb = VarBuilder::from_varmap(&var_map, DType::F32, &device);
+    let block = Block::new(n_embd, n_heads, vb).unwrap();
+    let idx = Tensor::from_slice(&[0f32, 1.0, 2.0], &[1, 32, 8], &device)?; // (B, T, C)
+
+    // When
+    let output_idx = block.forward(&idx)?;
+
+    // Then input_dim = output_dim
+    assert_eq!(*output_idx.shape().dims(), *idx.shape().dims());
 
     Ok(())
 }
