@@ -294,9 +294,11 @@ impl Module for Transformer {
 
 impl Module for Block {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        // stabilizes pertubation of block signal
+        let scale = 0.5;
         let x_norm = self.ln1.forward(xs)?;
         let attn_out = self.multihead_attention.forward(&x_norm)?;
-        let x = (xs + attn_out)?;
+        let x = (xs + attn_out * scale)?;
 
         let x_norm = self.ln2.forward(&x)?;
         let ff_out = self.feedforward.forward(&x_norm)?;
