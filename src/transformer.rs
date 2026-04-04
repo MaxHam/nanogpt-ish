@@ -1,7 +1,6 @@
 use candle_core::{DType, Device, IndexOp, Result, Shape, Tensor};
 use candle_nn::{
-    AdamW, Embedding, Init, LayerNorm, Linear, Module, Optimizer, ParamsAdamW, VarBuilder, VarMap,
-    layer_norm_no_bias, linear_no_bias, loss, ops::softmax,
+    AdamW, Dropout, Embedding, Init, LayerNorm, Linear, Module, ModuleT, Optimizer, ParamsAdamW, VarBuilder, VarMap, layer_norm_no_bias, linear_no_bias, loss, ops::softmax
 };
 use rand::rngs::ThreadRng;
 
@@ -16,14 +15,16 @@ struct SelfAttention {
     q_proj: Linear,
     k_proj: Linear,
     v_proj: Linear,
+    dropout: Dropout,
 }
 
 impl SelfAttention {
-    fn new(n_embd: usize, head_size: usize, vb: VarBuilder<'_>) -> Result<Self> {
+    fn new(n_embd: usize, head_size: usize, dropout_prob: f32, vb: VarBuilder<'_>) -> Result<Self> {
         Ok(SelfAttention {
             q_proj: linear_no_bias(n_embd, head_size, vb.pp("q_proj"))?,
             k_proj: linear_no_bias(n_embd, head_size, vb.pp("k_proj"))?,
             v_proj: linear_no_bias(n_embd, head_size, vb.pp("v_proj"))?,
+            dropout: Dropout::new(dropout_prob),
         })
     }
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
@@ -60,10 +61,14 @@ impl SelfAttention {
         scores = ((scores * mask)? + (neg_large * zero_mask)?)?;
 
         // Softmax over last dim (keys)
-        let probs = softmax(&scores, scores.rank() - 1)?;
+        let mut attn = softmax(&scores, scores.rank() - 1)?;
+
+        // apply dropout to attention weights
+        // TODO: handle train arg better
+        attn = self.dropout.forward(&attn, true)?;
 
         // Weighted sum
-        let attn_out = probs.matmul(&v)?;
+        let attn_out = attn.matmul(&v)?;
 
         Ok(attn_out)
     }
@@ -76,12 +81,13 @@ struct MultiHeadAttention {
 }
 
 impl MultiHeadAttention {
-    fn new(n_heads: usize, n_embd: usize, vb: &VarBuilder) -> Result<Self> {
+    fn new(n_heads: usize, n_embd: usize, dropout: f32, vb: &VarBuilder) -> Result<Self> {
         let mut heads = Vec::with_capacity(n_heads);
         for i in 0..n_heads {
             heads.push(SelfAttention::new(
                 n_embd,
                 n_embd / n_heads,
+                dropout,
                 vb.pp(format!("attn_{i}")),
             )?);
         }
@@ -115,31 +121,34 @@ struct Block {
 }
 
 impl Block {
-    fn new(n_embd: usize, n_heads: usize, vb: VarBuilder<'_>) -> Result<Self> {
+    fn new(n_embd: usize, n_heads: usize, dropout: f32, vb: VarBuilder<'_>) -> Result<Self> {
         Ok(Block {
             ln1: layer_norm_no_bias(n_embd, 0.01, vb.pp("ln1"))?,
             ln2: layer_norm_no_bias(n_embd, 0.01, vb.pp("ln2"))?,
-            multihead_attention: MultiHeadAttention::new(n_heads, n_embd, &vb.pp("mha"))?,
-            feedforward: FeedForward::new(n_embd, vb.pp("ff"))?,
+            multihead_attention: MultiHeadAttention::new(n_heads, n_embd, dropout, &vb.pp("mha"))?,
+            feedforward: FeedForward::new(n_embd, n_embd * 4, vb.pp("ff"))?,
         })
     }
 }
 
 #[derive(Clone)]
 struct FeedForward {
-    linear: Linear,
+    l1: Linear,
+    l2: Linear,
 }
 
 impl FeedForward {
-    fn new(n_embd: usize, vb: VarBuilder) -> Result<Self> {
+    fn new(n_embd: usize, hidden: usize, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
-            linear: linear_no_bias(n_embd, n_embd, vb.pp("fc1"))?,
+            l1: linear_no_bias(n_embd, hidden, vb.pp("l1"))?,
+            l2: linear_no_bias(hidden, n_embd, vb.pp("l2"))?,
         })
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let x = self.linear.forward(x)?;
-        x.relu()
+        let x = self.l1.forward(x)?;
+        let output = x.relu()?;
+        self.l2.forward(&output)
     }
 }
 
@@ -162,6 +171,8 @@ impl Transformer {
         max_seq_len: usize,
         n_emb: usize,
         n_blocks: usize,
+        n_heads: usize,
+        dropout: f32
     ) -> Result<Self> {
         let mut var_map = VarMap::new();
         let vb = VarBuilder::from_varmap(&mut var_map, DType::F32, device);
@@ -176,7 +187,7 @@ impl Transformer {
         let pos_emb = Embedding::new(pos_emb_weights, n_emb);
         let mut blocks = Vec::with_capacity(n_blocks);
         for i in 0..n_blocks {
-            blocks.push(Block::new(n_emb, 4, vb.pp(format!("block_{i}")))?);
+            blocks.push(Block::new(n_emb, n_heads,dropout, vb.pp(format!("block_{i}")))?);
         }
 
         // weight tying, we reuse the token embedding for the lm_head
@@ -197,7 +208,7 @@ impl Transformer {
     }
 
     fn default(device: &Device) -> Result<Self> {
-        Transformer::new(64, device, 512, 32, 1)
+        Transformer::new(64, device, 512, 32, 1, 1, 0.1)
     }
 
     fn input_embedding(&self, idx: &Tensor) -> Result<Tensor> {
@@ -410,7 +421,7 @@ fn test_attention_head_shape() -> Result<()> {
     let device = Device::Cpu;
     let var_map = VarMap::new();
     let vb = VarBuilder::from_varmap(&var_map, DType::F32, &device);
-    let attn = SelfAttention::new(8, 8, vb).unwrap();
+    let attn = SelfAttention::new(8, 8, 0.1, vb).unwrap();
     let idx = Tensor::zeros((1, 32, 8), DType::F32, &device)?;
 
     // When
@@ -430,7 +441,7 @@ fn test_block_shape() -> Result<()> {
     let n_embd = 8;
     let n_heads = 4;
     let vb = VarBuilder::from_varmap(&var_map, DType::F32, &device);
-    let block = Block::new(n_embd, n_heads, vb).unwrap();
+    let block = Block::new(n_embd, n_heads, 0.1, vb).unwrap();
     let idx = Tensor::zeros((1, 32, 8), DType::F32, &device)?;
 
     // When
