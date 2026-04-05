@@ -1,6 +1,6 @@
 use candle_core::{DType, Device, IndexOp, Result, Shape, Tensor};
 use candle_nn::{
-    AdamW, Dropout, Embedding, Init, LayerNorm, Linear, Module, ModuleT, Optimizer, ParamsAdamW, VarBuilder, VarMap, layer_norm_no_bias, linear_no_bias, loss, ops::softmax
+    AdamW, Dropout, Embedding, Init, LayerNorm, Linear, Module, Optimizer, ParamsAdamW, VarBuilder, VarMap, layer_norm_no_bias, linear_no_bias, loss, ops::softmax
 };
 use rand::rngs::ThreadRng;
 
@@ -103,7 +103,7 @@ impl Module for MultiHeadAttention {
         let attention_head_outputs: Vec<Tensor> = self
             .heads
             .iter()
-            .map(|h| h.forward(&xs))
+            .map(|h| h.forward(xs))
             .collect::<Result<Vec<_>>>()?;
         let attn_out = Tensor::cat(&attention_head_outputs, 2)?;
         self.proj.forward(&attn_out)
@@ -174,8 +174,8 @@ impl Transformer {
         n_heads: usize,
         dropout: f32
     ) -> Result<Self> {
-        let mut var_map = VarMap::new();
-        let vb = VarBuilder::from_varmap(&mut var_map, DType::F32, device);
+        let var_map = VarMap::new();
+        let vb = VarBuilder::from_varmap(&var_map, DType::F32, device);
 
         let emb_init = Init::Randn {
             mean: 0.,
@@ -207,6 +207,7 @@ impl Transformer {
         })
     }
 
+    #[allow(dead_code)]
     fn default(device: &Device) -> Result<Self> {
         Transformer::new(64, device, 512, 32, 1, 1, 0.1)
     }
@@ -280,7 +281,7 @@ impl Generator for Transformer {
             };
 
             // reshape to [1,1]
-            let next_tensor = Tensor::from_slice(&[next_token], &[1, 1], &idx.device())?;
+            let next_tensor = Tensor::from_slice(&[next_token], &[1, 1], idx.device())?;
             idx = Tensor::cat(&[&idx, &next_tensor], 1)?;
         }
         Ok(idx)

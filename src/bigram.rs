@@ -28,8 +28,8 @@ pub struct Bigram {
 
 impl Bigram {
     pub fn new(vocab_size: usize, device: &Device) -> Result<Self> {
-        let mut var_map = VarMap::new();
-        let vb = VarBuilder::from_varmap(&mut var_map, DType::F32, device);
+        let var_map = VarMap::new();
+        let vb = VarBuilder::from_varmap(&var_map, DType::F32, device);
         let embeddings = vb.get((vocab_size, vocab_size), "embeddings")?;
         let tok_emb = Embedding::new(embeddings, vocab_size);
 
@@ -117,7 +117,7 @@ impl Generator for Bigram {
             };
 
             // reshape to [1,1]
-            let next_tensor = Tensor::from_slice(&[next_token], &[1, 1], &idx.device())?;
+            let next_tensor = Tensor::from_slice(&[next_token], &[1, 1], idx.device())?;
             idx = Tensor::cat(&[&idx, &next_tensor], 1)?;
         }
         Ok(idx)

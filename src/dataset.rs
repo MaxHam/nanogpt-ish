@@ -59,7 +59,7 @@ impl Dataset {
         // If we are using `Tokenizer::ascii()`, it can't represent bytes > 127.
         // For byte-level BPE tokenizers, we keep the full text.
         let contents = if tokenizer.is_ascii() {
-            filter_ascii(&contents.as_str())
+            filter_ascii(contents.as_str())
         } else {
             contents
         };
